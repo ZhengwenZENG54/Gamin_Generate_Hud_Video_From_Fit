@@ -3,7 +3,7 @@ from datetime import timedelta
 
 
 # 使用示例
-file_path = r"2025-12-03-18-23-42.fit"
+file_path = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\Gamin_Generate_Hud_Video_From_Fit\2025-12-09-18-56-51.fit"
 
 def parse_fit_file(file_path):
     try:
