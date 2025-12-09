@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import shutil   # 用于删除目录
 
 # —— 配置区域 —— 
-FIT_PATH        = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\Gamin_Generate_Hud_Video_From_Fit\2025-12-09-18-56-51.fit"   # 替换为您的FIT文件路径
+FIT_PATH        = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2025-12-09-18-56-51.fit"   # 替换为您的FIT文件路径
 OUTPUT_DIR      = "frames_hud"                # 临时帧目录
 FPS             = 30                          # 帧率
 WIDTH, HEIGHT   = 480, 270                    # 分辨率
@@ -16,8 +16,8 @@ FONT_SIZE       = 25                          # 字体大小
 PRINT_INTERVAL  = 10                          # 进度打印间隔（秒）
 
 # —— 在这里输入你要截取的绝对时间 —— 
-lap_start = datetime(2025, 12, 9, 11, 29, 47)
-lap_end   = datetime(2025, 12, 9, 11, 30, 47)
+lap_start = datetime(2025, 12, 9, 11, 29, 45)
+lap_end   = datetime(2025, 12, 9, 12, 5, 55)
 
 # 自动生成输出文件名
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
