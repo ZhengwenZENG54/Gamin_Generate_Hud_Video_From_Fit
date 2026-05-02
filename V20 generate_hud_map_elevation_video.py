@@ -12,7 +12,7 @@ FIT_PATH = None
 # FIT_PATH = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-18-18-20-58.fit"
 
 # 原模块路径
-MODULE_PATH = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\Gamin_Generate_Hud_Video_From_Fit\generate_hud_and_map_video_20.py"
+MODULE_PATH = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\Gamin_Generate_Hud_Video_From_Fit\generate_hud_map_elevation_video_20.py"
 
 # 注意：这里改为默认不生成任何视频，让用户选择
 GENERATE_HUD = False    # 是否生成HUD视频
