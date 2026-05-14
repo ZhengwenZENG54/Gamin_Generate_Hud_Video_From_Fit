@@ -1,3 +1,4 @@
+FP = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-25-10-07-30.fit"
 # # # import numpy as np
 # # # # from fitparse import FitFile
 # # # # import matplotlib.pyplot as plt
@@ -859,175 +860,175 @@
 
 
 
-import os
-import numpy as np
-from fitparse import FitFile
-from datetime import datetime, timedelta
-import sys
+# import os
+# import numpy as np
+# from fitparse import FitFile
+# from datetime import datetime, timedelta
+# import sys
 
-def test_fit_data(fit_path, lap_start=None, lap_end=None):
-    """
-    验证FIT文件数据读取情况
-    """
-    print(f"=== FIT文件数据验证 ===")
-    print(f"文件路径: {fit_path}")
-    print(f"文件大小: {os.path.getsize(fit_path)} 字节")
+# def test_fit_data(fit_path, lap_start=None, lap_end=None):
+#     """
+#     验证FIT文件数据读取情况
+#     """
+#     print(f"=== FIT文件数据验证 ===")
+#     print(f"文件路径: {fit_path}")
+#     print(f"文件大小: {os.path.getsize(fit_path)} 字节")
     
-    if not os.path.exists(fit_path):
-        print(f"❌ 文件不存在: {fit_path}")
-        return
+#     if not os.path.exists(fit_path):
+#         print(f"❌ 文件不存在: {fit_path}")
+#         return
     
-    try:
-        # 加载FIT文件
-        fit = FitFile(fit_path)
+#     try:
+#         # 加载FIT文件
+#         fit = FitFile(fit_path)
         
-        # 获取所有记录
-        recs = []
-        for m in fit.get_messages('record'):
-            vals = m.get_values()
-            if 'timestamp' in vals:
-                recs.append(vals)
+#         # 获取所有记录
+#         recs = []
+#         for m in fit.get_messages('record'):
+#             vals = m.get_values()
+#             if 'timestamp' in vals:
+#                 recs.append(vals)
         
-        if not recs:
-            print("❌ FIT文件中没有数据记录")
-            return
+#         if not recs:
+#             print("❌ FIT文件中没有数据记录")
+#             return
         
-        print(f"✅ 找到 {len(recs)} 条数据记录")
-        print(f"第一条记录时间: {recs[0]['timestamp']}")
-        print(f"最后一条记录时间: {recs[-1]['timestamp']}")
+#         print(f"✅ 找到 {len(recs)} 条数据记录")
+#         print(f"第一条记录时间: {recs[0]['timestamp']}")
+#         print(f"最后一条记录时间: {recs[-1]['timestamp']}")
         
-        # 分析字段
-        print("\n=== 字段分析 ===")
-        all_fields = set()
-        for r in recs:
-            all_fields.update(r.keys())
+#         # 分析字段
+#         print("\n=== 字段分析 ===")
+#         all_fields = set()
+#         for r in recs:
+#             all_fields.update(r.keys())
         
-        print(f"总字段数: {len(all_fields)}")
-        print("可用字段:")
-        for field in sorted(all_fields):
-            print(f"  - {field}")
+#         print(f"总字段数: {len(all_fields)}")
+#         print("可用字段:")
+#         for field in sorted(all_fields):
+#             print(f"  - {field}")
         
-        # 检查重要字段
-        important_fields = ['timestamp', 'distance', 'position_lat', 'position_long', 
-                           'enhanced_altitude', 'altitude', 'speed', 'enhanced_speed',
-                           'power', 'heart_rate', 'cadence']
+#         # 检查重要字段
+#         important_fields = ['timestamp', 'distance', 'position_lat', 'position_long', 
+#                            'enhanced_altitude', 'altitude', 'speed', 'enhanced_speed',
+#                            'power', 'heart_rate', 'cadence']
         
-        print("\n=== 重要字段检查 ===")
-        for field in important_fields:
-            count = sum(1 for r in recs if field in r)
-            if count > 0:
-                # 获取该字段的样本值
-                for r in recs:
-                    if field in r:
-                        sample = r[field]
-                        if isinstance(sample, (int, float)):
-                            unit = ""
-                            if field in ['distance']:
-                                unit = " m"
-                            elif field in ['speed', 'enhanced_speed']:
-                                unit = " m/s"
-                            elif field in ['enhanced_altitude', 'altitude']:
-                                unit = " m"
-                            print(f"✅ {field}: {count}/{len(recs)} 条记录, 样本值: {sample}{unit}")
-                        else:
-                            print(f"✅ {field}: {count}/{len(recs)} 条记录, 样本值: {sample}")
-                        break
-            else:
-                print(f"❌ {field}: 0/{len(recs)} 条记录")
+#         print("\n=== 重要字段检查 ===")
+#         for field in important_fields:
+#             count = sum(1 for r in recs if field in r)
+#             if count > 0:
+#                 # 获取该字段的样本值
+#                 for r in recs:
+#                     if field in r:
+#                         sample = r[field]
+#                         if isinstance(sample, (int, float)):
+#                             unit = ""
+#                             if field in ['distance']:
+#                                 unit = " m"
+#                             elif field in ['speed', 'enhanced_speed']:
+#                                 unit = " m/s"
+#                             elif field in ['enhanced_altitude', 'altitude']:
+#                                 unit = " m"
+#                             print(f"✅ {field}: {count}/{len(recs)} 条记录, 样本值: {sample}{unit}")
+#                         else:
+#                             print(f"✅ {field}: {count}/{len(recs)} 条记录, 样本值: {sample}")
+#                         break
+#             else:
+#                 print(f"❌ {field}: 0/{len(recs)} 条记录")
         
-        # 检查特定时间范围内的数据
-        if lap_start and lap_end:
-            print(f"\n=== 时间范围检查: {lap_start} 到 {lap_end} ===")
-            filtered_recs = []
-            distances = []
-            altitudes = []
+#         # 检查特定时间范围内的数据
+#         if lap_start and lap_end:
+#             print(f"\n=== 时间范围检查: {lap_start} 到 {lap_end} ===")
+#             filtered_recs = []
+#             distances = []
+#             altitudes = []
             
-            for r in recs:
-                ts = r['timestamp']
-                if lap_start <= ts <= lap_end:
-                    filtered_recs.append(r)
-                    if 'distance' in r:
-                        distances.append(r['distance'])
-                    if 'enhanced_altitude' in r:
-                        altitudes.append(r['enhanced_altitude'])
-                    elif 'altitude' in r:
-                        altitudes.append(r['altitude'])
+#             for r in recs:
+#                 ts = r['timestamp']
+#                 if lap_start <= ts <= lap_end:
+#                     filtered_recs.append(r)
+#                     if 'distance' in r:
+#                         distances.append(r['distance'])
+#                     if 'enhanced_altitude' in r:
+#                         altitudes.append(r['enhanced_altitude'])
+#                     elif 'altitude' in r:
+#                         altitudes.append(r['altitude'])
             
-            print(f"时间范围内记录数: {len(filtered_recs)}")
-            if distances:
-                print(f"距离范围: {min(distances):.2f} - {max(distances):.2f} 米")
-                print(f"距离变化: {max(distances) - min(distances):.2f} 米")
-            if altitudes:
-                altitudes = [a for a in altitudes if a is not None]
-                if altitudes:
-                    print(f"海拔范围: {min(altitudes):.1f} - {max(altitudes):.1f} 米")
-                    print(f"总爬升: {max(altitudes) - min(altitudes):.1f} 米")
+#             print(f"时间范围内记录数: {len(filtered_recs)}")
+#             if distances:
+#                 print(f"距离范围: {min(distances):.2f} - {max(distances):.2f} 米")
+#                 print(f"距离变化: {max(distances) - min(distances):.2f} 米")
+#             if altitudes:
+#                 altitudes = [a for a in altitudes if a is not None]
+#                 if altitudes:
+#                     print(f"海拔范围: {min(altitudes):.1f} - {max(altitudes):.1f} 米")
+#                     print(f"总爬升: {max(altitudes) - min(altitudes):.1f} 米")
         
-        # 打印前几条记录的详细信息
-        print(f"\n=== 前5条记录详细信息 ===")
-        for i, r in enumerate(recs[:5]):
-            print(f"\n记录 {i+1}:")
-            for key, value in r.items():
-                if key == 'timestamp':
-                    print(f"  {key}: {value}")
-                elif isinstance(value, (int, float)):
-                    if key in ['position_lat', 'position_long']:
-                        # 转换semicircles到度
-                        deg = value * (180.0 / 2**31)
-                        print(f"  {key}: {value} (semicircles) = {deg:.6f}°")
-                    elif key in ['distance']:
-                        print(f"  {key}: {value} 米")
-                    elif key in ['speed', 'enhanced_speed']:
-                        print(f"  {key}: {value} m/s = {value * 3.6:.1f} km/h")
-                    elif key in ['enhanced_altitude', 'altitude']:
-                        print(f"  {key}: {value} 米")
-                    else:
-                        print(f"  {key}: {value}")
-                else:
-                    print(f"  {key}: {value}")
+#         # 打印前几条记录的详细信息
+#         print(f"\n=== 前5条记录详细信息 ===")
+#         for i, r in enumerate(recs[:5]):
+#             print(f"\n记录 {i+1}:")
+#             for key, value in r.items():
+#                 if key == 'timestamp':
+#                     print(f"  {key}: {value}")
+#                 elif isinstance(value, (int, float)):
+#                     if key in ['position_lat', 'position_long']:
+#                         # 转换semicircles到度
+#                         deg = value * (180.0 / 2**31)
+#                         print(f"  {key}: {value} (semicircles) = {deg:.6f}°")
+#                     elif key in ['distance']:
+#                         print(f"  {key}: {value} 米")
+#                     elif key in ['speed', 'enhanced_speed']:
+#                         print(f"  {key}: {value} m/s = {value * 3.6:.1f} km/h")
+#                     elif key in ['enhanced_altitude', 'altitude']:
+#                         print(f"  {key}: {value} 米")
+#                     else:
+#                         print(f"  {key}: {value}")
+#                 else:
+#                     print(f"  {key}: {value}")
         
-        # 计算距离数据的统计
-        print(f"\n=== 距离数据统计 ===")
-        distances = [r.get('distance') for r in recs if 'distance' in r]
-        if distances:
-            distances = [d for d in distances if d is not None]
-            print(f"有效距离记录数: {len(distances)}")
-            print(f"最小距离: {min(distances):.2f} 米")
-            print(f"最大距离: {max(distances):.2f} 米")
-            print(f"平均距离: {np.mean(distances):.2f} 米")
-            print(f"距离增量: {max(distances) - min(distances):.2f} 米")
+#         # 计算距离数据的统计
+#         print(f"\n=== 距离数据统计 ===")
+#         distances = [r.get('distance') for r in recs if 'distance' in r]
+#         if distances:
+#             distances = [d for d in distances if d is not None]
+#             print(f"有效距离记录数: {len(distances)}")
+#             print(f"最小距离: {min(distances):.2f} 米")
+#             print(f"最大距离: {max(distances):.2f} 米")
+#             print(f"平均距离: {np.mean(distances):.2f} 米")
+#             print(f"距离增量: {max(distances) - min(distances):.2f} 米")
             
-            # 检查距离是否单调递增
-            is_increasing = all(distances[i] <= distances[i+1] for i in range(len(distances)-1))
-            print(f"距离单调递增: {'是' if is_increasing else '否'}")
+#             # 检查距离是否单调递增
+#             is_increasing = all(distances[i] <= distances[i+1] for i in range(len(distances)-1))
+#             print(f"距离单调递增: {'是' if is_increasing else '否'}")
             
-            # 计算每秒钟的距离变化
-            if len(distances) > 1:
-                time_diffs = []
-                dist_diffs = []
-                for i in range(1, min(10, len(distances))):  # 只看前10个
-                    time_diff = (recs[i]['timestamp'] - recs[i-1]['timestamp']).total_seconds()
-                    dist_diff = distances[i] - distances[i-1]
-                    if time_diff > 0:
-                        speed_mps = dist_diff / time_diff
-                        print(f"  记录{i-1}-{i}: 时间差={time_diff:.1f}s, 距离差={dist_diff:.1f}m, 速度={speed_mps:.1f}m/s ({speed_mps*3.6:.1f}km/h)")
+#             # 计算每秒钟的距离变化
+#             if len(distances) > 1:
+#                 time_diffs = []
+#                 dist_diffs = []
+#                 for i in range(1, min(10, len(distances))):  # 只看前10个
+#                     time_diff = (recs[i]['timestamp'] - recs[i-1]['timestamp']).total_seconds()
+#                     dist_diff = distances[i] - distances[i-1]
+#                     if time_diff > 0:
+#                         speed_mps = dist_diff / time_diff
+#                         print(f"  记录{i-1}-{i}: 时间差={time_diff:.1f}s, 距离差={dist_diff:.1f}m, 速度={speed_mps:.1f}m/s ({speed_mps*3.6:.1f}km/h)")
         
-        print(f"\n✅ 验证完成")
+#         print(f"\n✅ 验证完成")
         
-    except Exception as e:
-        print(f"❌ 验证过程中发生错误: {e}")
-        import traceback
-        traceback.print_exc()
+#     except Exception as e:
+#         print(f"❌ 验证过程中发生错误: {e}")
+#         import traceback
+#         traceback.print_exc()
 
-if __name__ == "__main__":
-    # 测试文件路径
-    FIT_PATH = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-25-10-07-30.fit"
+# if __name__ == "__main__":
+#     # 测试文件路径
+#     FIT_PATH = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-25-10-07-30.fit"
     
-    # 测试时间范围
-    lap_start = datetime(2026, 4, 25, 2, 7, 30)
-    lap_end = datetime(2026, 4, 25, 2, 15, 52)
+#     # 测试时间范围
+#     lap_start = datetime(2026, 4, 25, 2, 7, 30)
+#     lap_end = datetime(2026, 4, 25, 2, 15, 52)
     
-    test_fit_data(FIT_PATH, lap_start, lap_end)
+#     test_fit_data(FIT_PATH, lap_start, lap_end)
 
 
 from fitparse import FitFile
@@ -1035,7 +1036,7 @@ from datetime import timedelta
 
 
 # 使用示例
-file_path = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-25-10-07-30.fit"
+file_path = FP
 
 def parse_fit_file(file_path):
     try:
@@ -1195,620 +1196,620 @@ def print_all_laps_and_events(fit_path):
         if etype == "lap" or etrigger == "manual":
             print(f"[Event {i+1}] ts={ts}, event={etype}, event_type={etrigger}")
 
-import numpy as np
-from fitparse import FitFile
-import math
+# import numpy as np
+# from fitparse import FitFile
+# import math
 
-def calculate_great_circle_distance(lat1, lon1, lat2, lon2):
-    """
-    使用Haversine公式计算两个经纬度坐标之间的距离（单位：米）
-    """
-    # 将角度转换为弧度
-    lat1_rad = math.radians(lat1)
-    lon1_rad = math.radians(lon1)
-    lat2_rad = math.radians(lat2)
-    lon2_rad = math.radians(lon2)
+# def calculate_great_circle_distance(lat1, lon1, lat2, lon2):
+#     """
+#     使用Haversine公式计算两个经纬度坐标之间的距离（单位：米）
+#     """
+#     # 将角度转换为弧度
+#     lat1_rad = math.radians(lat1)
+#     lon1_rad = math.radians(lon1)
+#     lat2_rad = math.radians(lat2)
+#     lon2_rad = math.radians(lon2)
     
-    # Haversine公式
-    dlat = lat2_rad - lat1_rad
-    dlon = lon2_rad - lon1_rad
-    a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+#     # Haversine公式
+#     dlat = lat2_rad - lat1_rad
+#     dlon = lon2_rad - lon1_rad
+#     a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
+#     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     
-    # 地球半径（单位：米）
-    R = 6371000
-    distance = R * c
+#     # 地球半径（单位：米）
+#     R = 6371000
+#     distance = R * c
     
-    return distance
+#     return distance
 
-def analyze_fit_file_statistics(file_path, smoothing_window=5, altitude_threshold=0.5):
-    """
-    分析FIT文件，计算累计距离和累计爬升
+# def analyze_fit_file_statistics(file_path, smoothing_window=5, altitude_threshold=0.5):
+#     """
+#     分析FIT文件，计算累计距离和累计爬升
     
-    参数:
-    ----------
-    file_path : str
-        FIT文件路径
-    smoothing_window : int
-        海拔平滑窗口大小（用于累计爬升计算）
-    altitude_threshold : float
-        最小海拔变化阈值，超过此阈值才计入爬升（单位：米）
+#     参数:
+#     ----------
+#     file_path : str
+#         FIT文件路径
+#     smoothing_window : int
+#         海拔平滑窗口大小（用于累计爬升计算）
+#     altitude_threshold : float
+#         最小海拔变化阈值，超过此阈值才计入爬升（单位：米）
         
-    返回值:
-    ----------
-    dict
-        包含统计信息的字典
-    """
-    print(f"正在分析FIT文件: {file_path}")
+#     返回值:
+#     ----------
+#     dict
+#         包含统计信息的字典
+#     """
+#     print(f"正在分析FIT文件: {file_path}")
     
-    try:
-        fit = FitFile(file_path)
-    except Exception as e:
-        print(f"无法打开FIT文件: {e}")
-        return None
+#     try:
+#         fit = FitFile(file_path)
+#     except Exception as e:
+#         print(f"无法打开FIT文件: {e}")
+#         return None
     
-    # 收集数据
-    records = []
+#     # 收集数据
+#     records = []
     
-    # 获取所有记录
-    for record in fit.get_messages('record'):
-        record_data = record.get_values()
-        records.append(record_data)
+#     # 获取所有记录
+#     for record in fit.get_messages('record'):
+#         record_data = record.get_values()
+#         records.append(record_data)
     
-    if not records:
-        print("FIT文件中没有记录数据")
-        return None
+#     if not records:
+#         print("FIT文件中没有记录数据")
+#         return None
     
-    print(f"总记录数: {len(records)}")
+#     print(f"总记录数: {len(records)}")
     
-    # 检查数据字段
-    first_record = records[0]
-    print("可用字段:", list(first_record.keys()))
+#     # 检查数据字段
+#     first_record = records[0]
+#     print("可用字段:", list(first_record.keys()))
     
-    # 提取关键数据
-    timestamps = []
-    distances = []  # 累计距离（米）
-    altitudes = []  # 海拔（米）
-    positions_lat = []  # 纬度
-    positions_long = []  # 经度
-    enhanced_altitudes = []  # 增强海拔
+#     # 提取关键数据
+#     timestamps = []
+#     distances = []  # 累计距离（米）
+#     altitudes = []  # 海拔（米）
+#     positions_lat = []  # 纬度
+#     positions_long = []  # 经度
+#     enhanced_altitudes = []  # 增强海拔
     
-    for rec in records:
-        # 时间戳
-        if 'timestamp' in rec:
-            timestamps.append(rec['timestamp'])
+#     for rec in records:
+#         # 时间戳
+#         if 'timestamp' in rec:
+#             timestamps.append(rec['timestamp'])
         
-        # 距离
-        if 'distance' in rec and rec['distance'] is not None:
-            distances.append(rec['distance'])
-        else:
-            distances.append(np.nan)
+#         # 距离
+#         if 'distance' in rec and rec['distance'] is not None:
+#             distances.append(rec['distance'])
+#         else:
+#             distances.append(np.nan)
         
-        # 海拔
-        if 'altitude' in rec and rec['altitude'] is not None:
-            altitudes.append(rec['altitude'])
-        else:
-            altitudes.append(np.nan)
+#         # 海拔
+#         if 'altitude' in rec and rec['altitude'] is not None:
+#             altitudes.append(rec['altitude'])
+#         else:
+#             altitudes.append(np.nan)
             
-        # 增强海拔
-        if 'enhanced_altitude' in rec and rec['enhanced_altitude'] is not None:
-            enhanced_altitudes.append(rec['enhanced_altitude'])
-        else:
-            enhanced_altitudes.append(np.nan)
+#         # 增强海拔
+#         if 'enhanced_altitude' in rec and rec['enhanced_altitude'] is not None:
+#             enhanced_altitudes.append(rec['enhanced_altitude'])
+#         else:
+#             enhanced_altitudes.append(np.nan)
         
-        # 位置
-        if 'position_lat' in rec and rec['position_lat'] is not None:
-            # 从semicircles转换为度
-            lat_deg = rec['position_lat'] * (180.0 / 2**31)
-            positions_lat.append(lat_deg)
-        else:
-            positions_lat.append(np.nan)
+#         # 位置
+#         if 'position_lat' in rec and rec['position_lat'] is not None:
+#             # 从semicircles转换为度
+#             lat_deg = rec['position_lat'] * (180.0 / 2**31)
+#             positions_lat.append(lat_deg)
+#         else:
+#             positions_lat.append(np.nan)
             
-        if 'position_long' in rec and rec['position_long'] is not None:
-            lon_deg = rec['position_long'] * (180.0 / 2**31)
-            positions_long.append(lon_deg)
-        else:
-            positions_long.append(np.nan)
+#         if 'position_long' in rec and rec['position_long'] is not None:
+#             lon_deg = rec['position_long'] * (180.0 / 2**31)
+#             positions_long.append(lon_deg)
+#         else:
+#             positions_long.append(np.nan)
     
-    # 统计信息
-    print("\n=== 数据可用性统计 ===")
-    valid_dist_count = sum(1 for d in distances if not np.isnan(d))
-    valid_alt_count = sum(1 for a in altitudes if not np.isnan(a))
-    valid_enh_alt_count = sum(1 for ea in enhanced_altitudes if not np.isnan(ea))
-    valid_gps_count = sum(1 for lat, lon in zip(positions_lat, positions_long) 
-                          if not (np.isnan(lat) or np.isnan(lon)))
+#     # 统计信息
+#     print("\n=== 数据可用性统计 ===")
+#     valid_dist_count = sum(1 for d in distances if not np.isnan(d))
+#     valid_alt_count = sum(1 for a in altitudes if not np.isnan(a))
+#     valid_enh_alt_count = sum(1 for ea in enhanced_altitudes if not np.isnan(ea))
+#     valid_gps_count = sum(1 for lat, lon in zip(positions_lat, positions_long) 
+#                           if not (np.isnan(lat) or np.isnan(lon)))
     
-    print(f"距离数据: {valid_dist_count}/{len(distances)} ({valid_dist_count/len(distances)*100:.1f}%)")
-    print(f"海拔数据: {valid_alt_count}/{len(altitudes)} ({valid_alt_count/len(altitudes)*100:.1f}%)")
-    print(f"增强海拔: {valid_enh_alt_count}/{len(enhanced_altitudes)} ({valid_enh_alt_count/len(enhanced_altitudes)*100:.1f}%)")
-    print(f"GPS数据: {valid_gps_count}/{len(positions_lat)} ({valid_gps_count/len(positions_lat)*100:.1f}%)")
+#     print(f"距离数据: {valid_dist_count}/{len(distances)} ({valid_dist_count/len(distances)*100:.1f}%)")
+#     print(f"海拔数据: {valid_alt_count}/{len(altitudes)} ({valid_alt_count/len(altitudes)*100:.1f}%)")
+#     print(f"增强海拔: {valid_enh_alt_count}/{len(enhanced_altitudes)} ({valid_enh_alt_count/len(enhanced_altitudes)*100:.1f}%)")
+#     print(f"GPS数据: {valid_gps_count}/{len(positions_lat)} ({valid_gps_count/len(positions_lat)*100:.1f}%)")
     
-    # 计算累计距离
-    print("\n=== 累计距离计算 ===")
+#     # 计算累计距离
+#     print("\n=== 累计距离计算 ===")
     
-    # 方法1: 使用FIT文件中的distance字段
-    if valid_dist_count > 0:
-        # 找到最后一个有效的距离值
-        last_valid_dist_idx = max(i for i, d in enumerate(distances) if not np.isnan(d))
-        total_distance_from_fit = distances[last_valid_dist_idx]  # 单位：米
+#     # 方法1: 使用FIT文件中的distance字段
+#     if valid_dist_count > 0:
+#         # 找到最后一个有效的距离值
+#         last_valid_dist_idx = max(i for i, d in enumerate(distances) if not np.isnan(d))
+#         total_distance_from_fit = distances[last_valid_dist_idx]  # 单位：米
         
-        # 如果有多个lap，可能需要在lap/session消息中查找
-        session_dist = None
-        session = None
+#         # 如果有多个lap，可能需要在lap/session消息中查找
+#         session_dist = None
+#         session = None
         
-        # 查找session消息
-        for session_msg in fit.get_messages('session'):
-            session = session_msg.get_values()
-            if 'total_distance' in session and session['total_distance'] is not None:
-                session_dist = session['total_distance']
-                break
+#         # 查找session消息
+#         for session_msg in fit.get_messages('session'):
+#             session = session_msg.get_values()
+#             if 'total_distance' in session and session['total_distance'] is not None:
+#                 session_dist = session['total_distance']
+#                 break
         
-        lap_dist = None
-        # 查找lap消息
-        for lap_msg in fit.get_messages('lap'):
-            lap = lap_msg.get_values()
-            if 'total_distance' in lap and lap['total_distance'] is not None:
-                lap_dist = lap['total_distance']
-                break
+#         lap_dist = None
+#         # 查找lap消息
+#         for lap_msg in fit.get_messages('lap'):
+#             lap = lap_msg.get_values()
+#             if 'total_distance' in lap and lap['total_distance'] is not None:
+#                 lap_dist = lap['total_distance']
+#                 break
                 
-        print(f"从record字段获取的累计距离: {total_distance_from_fit:.2f} 米 ({total_distance_from_fit/1000:.2f} 公里)")
-        if session_dist is not None:
-            print(f"从session字段获取的累计距离: {session_dist:.2f} 米 ({session_dist/1000:.2f} 公里)")
-        if lap_dist is not None:
-            print(f"从lap字段获取的累计距离: {lap_dist:.2f} 米 ({lap_dist/1000:.2f} 公里)")
-    else:
-        total_distance_from_fit = 0
-        print("警告: FIT文件中没有distance字段")
+#         print(f"从record字段获取的累计距离: {total_distance_from_fit:.2f} 米 ({total_distance_from_fit/1000:.2f} 公里)")
+#         if session_dist is not None:
+#             print(f"从session字段获取的累计距离: {session_dist:.2f} 米 ({session_dist/1000:.2f} 公里)")
+#         if lap_dist is not None:
+#             print(f"从lap字段获取的累计距离: {lap_dist:.2f} 米 ({lap_dist/1000:.2f} 公里)")
+#     else:
+#         total_distance_from_fit = 0
+#         print("警告: FIT文件中没有distance字段")
     
-    # 方法2: 从GPS坐标计算累计距离
-    if valid_gps_count >= 2:
-        total_distance_from_gps = 0
-        prev_lat = None
-        prev_lon = None
+#     # 方法2: 从GPS坐标计算累计距离
+#     if valid_gps_count >= 2:
+#         total_distance_from_gps = 0
+#         prev_lat = None
+#         prev_lon = None
         
-        for i, (lat, lon) in enumerate(zip(positions_lat, positions_long)):
-            if not (np.isnan(lat) or np.isnan(lon)):
-                if prev_lat is not None and prev_lon is not None:
-                    # 计算两点间距离
-                    segment_dist = calculate_great_circle_distance(prev_lat, prev_lon, lat, lon)
-                    total_distance_from_gps += segment_dist
-                prev_lat = lat
-                prev_lon = lon
+#         for i, (lat, lon) in enumerate(zip(positions_lat, positions_long)):
+#             if not (np.isnan(lat) or np.isnan(lon)):
+#                 if prev_lat is not None and prev_lon is not None:
+#                     # 计算两点间距离
+#                     segment_dist = calculate_great_circle_distance(prev_lat, prev_lon, lat, lon)
+#                     total_distance_from_gps += segment_dist
+#                 prev_lat = lat
+#                 prev_lon = lon
         
-        print(f"从GPS坐标计算的累计距离: {total_distance_from_gps:.2f} 米 ({total_distance_from_gps/1000:.2f} 公里)")
-    else:
-        total_distance_from_gps = 0
-        print("警告: GPS数据不足，无法计算距离")
+#         print(f"从GPS坐标计算的累计距离: {total_distance_from_gps:.2f} 米 ({total_distance_from_gps/1000:.2f} 公里)")
+#     else:
+#         total_distance_from_gps = 0
+#         print("警告: GPS数据不足，无法计算距离")
     
-    # 计算累计爬升
-    print("\n=== 累计爬升计算 ===")
+#     # 计算累计爬升
+#     print("\n=== 累计爬升计算 ===")
     
-    # 确定使用哪个海拔数据源
-    if valid_enh_alt_count > valid_alt_count:
-        print(f"使用增强海拔数据 (有{valid_enh_alt_count}个点)")
-        altitude_source = enhanced_altitudes
-    else:
-        print(f"使用普通海拔数据 (有{valid_alt_count}个点)")
-        altitude_source = altitudes
+#     # 确定使用哪个海拔数据源
+#     if valid_enh_alt_count > valid_alt_count:
+#         print(f"使用增强海拔数据 (有{valid_enh_alt_count}个点)")
+#         altitude_source = enhanced_altitudes
+#     else:
+#         print(f"使用普通海拔数据 (有{valid_alt_count}个点)")
+#         altitude_source = altitudes
     
-    # 方法1: 简单累加（无过滤）
-    simple_ascent = 0
-    prev_alt = None
+#     # 方法1: 简单累加（无过滤）
+#     simple_ascent = 0
+#     prev_alt = None
     
-    for alt in altitude_source:
-        if not np.isnan(alt):
-            if prev_alt is not None:
-                diff = alt - prev_alt
-                if diff > 0:  # 只累加上升
-                    simple_ascent += diff
-            prev_alt = alt
+#     for alt in altitude_source:
+#         if not np.isnan(alt):
+#             if prev_alt is not None:
+#                 diff = alt - prev_alt
+#                 if diff > 0:  # 只累加上升
+#                     simple_ascent += diff
+#             prev_alt = alt
     
-    print(f"简单累加累计爬升: {simple_ascent:.1f} 米")
+#     print(f"简单累加累计爬升: {simple_ascent:.1f} 米")
     
-    # 方法2: 阈值过滤
-    threshold_ascent = 0
-    prev_alt = None
+#     # 方法2: 阈值过滤
+#     threshold_ascent = 0
+#     prev_alt = None
     
-    for alt in altitude_source:
-        if not np.isnan(alt):
-            if prev_alt is not None:
-                diff = alt - prev_alt
-                if diff > altitude_threshold:  # 超过阈值才计入
-                    threshold_ascent += diff
-            prev_alt = alt
+#     for alt in altitude_source:
+#         if not np.isnan(alt):
+#             if prev_alt is not None:
+#                 diff = alt - prev_alt
+#                 if diff > altitude_threshold:  # 超过阈值才计入
+#                     threshold_ascent += diff
+#             prev_alt = alt
     
-    print(f"阈值过滤累计爬升(阈值={altitude_threshold}米): {threshold_ascent:.1f} 米")
+#     print(f"阈值过滤累计爬升(阈值={altitude_threshold}米): {threshold_ascent:.1f} 米")
     
-    # 方法3: 滑动窗口平均 + 阈值过滤
-    if smoothing_window > 0 and valid_enh_alt_count + valid_alt_count > smoothing_window * 2:
-        # 合并海拔数据
-        merged_alts = []
-        for i in range(len(altitudes)):
-            if not np.isnan(enhanced_altitudes[i]):
-                merged_alts.append(enhanced_altitudes[i])
-            elif not np.isnan(altitudes[i]):
-                merged_alts.append(altitudes[i])
-            else:
-                merged_alts.append(np.nan)
+#     # 方法3: 滑动窗口平均 + 阈值过滤
+#     if smoothing_window > 0 and valid_enh_alt_count + valid_alt_count > smoothing_window * 2:
+#         # 合并海拔数据
+#         merged_alts = []
+#         for i in range(len(altitudes)):
+#             if not np.isnan(enhanced_altitudes[i]):
+#                 merged_alts.append(enhanced_altitudes[i])
+#             elif not np.isnan(altitudes[i]):
+#                 merged_alts.append(altitudes[i])
+#             else:
+#                 merged_alts.append(np.nan)
         
-        # 滑动窗口平均
-        smoothed_alts = []
-        for i in range(len(merged_alts)):
-            if np.isnan(merged_alts[i]):
-                smoothed_alts.append(np.nan)
-                continue
+#         # 滑动窗口平均
+#         smoothed_alts = []
+#         for i in range(len(merged_alts)):
+#             if np.isnan(merged_alts[i]):
+#                 smoothed_alts.append(np.nan)
+#                 continue
                 
-            # 获取窗口内的值
-            window_start = max(0, i - smoothing_window)
-            window_end = min(len(merged_alts), i + smoothing_window + 1)
-            window_values = [merged_alts[j] for j in range(window_start, window_end) 
-                           if not np.isnan(merged_alts[j])]
+#             # 获取窗口内的值
+#             window_start = max(0, i - smoothing_window)
+#             window_end = min(len(merged_alts), i + smoothing_window + 1)
+#             window_values = [merged_alts[j] for j in range(window_start, window_end) 
+#                            if not np.isnan(merged_alts[j])]
             
-            if window_values:
-                smoothed_alts.append(np.mean(window_values))
-            else:
-                smoothed_alts.append(np.nan)
+#             if window_values:
+#                 smoothed_alts.append(np.mean(window_values))
+#             else:
+#                 smoothed_alts.append(np.nan)
         
-        # 计算累计爬升
-        smoothed_ascent = 0
-        prev_alt = None
+#         # 计算累计爬升
+#         smoothed_ascent = 0
+#         prev_alt = None
         
-        for alt in smoothed_alts:
-            if not np.isnan(alt):
-                if prev_alt is not None:
-                    diff = alt - prev_alt
-                    if diff > altitude_threshold:  # 超过阈值才计入
-                        smoothed_ascent += diff
-                prev_alt = alt
+#         for alt in smoothed_alts:
+#             if not np.isnan(alt):
+#                 if prev_alt is not None:
+#                     diff = alt - prev_alt
+#                     if diff > altitude_threshold:  # 超过阈值才计入
+#                         smoothed_ascent += diff
+#                 prev_alt = alt
         
-        print(f"滑动窗口平均累计爬升(窗口={smoothing_window}, 阈值={altitude_threshold}米): {smoothed_ascent:.1f} 米")
-    else:
-        smoothed_ascent = 0
-        print(f"数据不足，无法进行滑动窗口平均(需要至少{smoothing_window*2}个有效海拔点)")
+#         print(f"滑动窗口平均累计爬升(窗口={smoothing_window}, 阈值={altitude_threshold}米): {smoothed_ascent:.1f} 米")
+#     else:
+#         smoothed_ascent = 0
+#         print(f"数据不足，无法进行滑动窗口平均(需要至少{smoothing_window*2}个有效海拔点)")
     
-    # 尝试从session/lap消息获取累计爬升
-    session_ascent = None
-    session = None
+#     # 尝试从session/lap消息获取累计爬升
+#     session_ascent = None
+#     session = None
     
-    for session_msg in fit.get_messages('session'):
-        session = session_msg.get_values()
-        if 'total_ascent' in session and session['total_ascent'] is not None:
-            session_ascent = session['total_ascent']
-            break
+#     for session_msg in fit.get_messages('session'):
+#         session = session_msg.get_values()
+#         if 'total_ascent' in session and session['total_ascent'] is not None:
+#             session_ascent = session['total_ascent']
+#             break
     
-    lap_ascent = None
-    for lap_msg in fit.get_messages('lap'):
-        lap = lap_msg.get_values()
-        if 'total_ascent' in lap and lap['total_ascent'] is not None:
-            lap_ascent = lap['total_ascent']
-            break
+#     lap_ascent = None
+#     for lap_msg in fit.get_messages('lap'):
+#         lap = lap_msg.get_values()
+#         if 'total_ascent' in lap and lap['total_ascent'] is not None:
+#             lap_ascent = lap['total_ascent']
+#             break
     
-    if session_ascent is not None:
-        print(f"从session字段获取的累计爬升: {session_ascent:.1f} 米")
-    if lap_ascent is not None:
-        print(f"从lap字段获取的累计爬升: {lap_ascent:.1f} 米")
+#     if session_ascent is not None:
+#         print(f"从session字段获取的累计爬升: {session_ascent:.1f} 米")
+#     if lap_ascent is not None:
+#         print(f"从lap字段获取的累计爬升: {lap_ascent:.1f} 米")
     
-    # 时间统计
-    if len(timestamps) >= 2:
-        start_time = timestamps[0]
-        end_time = timestamps[-1]
-        duration = (end_time - start_time).total_seconds()
-        hours = int(duration // 3600)
-        minutes = int((duration % 3600) // 60)
-        seconds = int(duration % 60)
-        print(f"\n=== 时间统计 ===")
-        print(f"开始时间: {start_time}")
-        print(f"结束时间: {end_time}")
-        print(f"总时长: {hours}:{minutes:02d}:{seconds:02d} ({duration:.0f}秒)")
+#     # 时间统计
+#     if len(timestamps) >= 2:
+#         start_time = timestamps[0]
+#         end_time = timestamps[-1]
+#         duration = (end_time - start_time).total_seconds()
+#         hours = int(duration // 3600)
+#         minutes = int((duration % 3600) // 60)
+#         seconds = int(duration % 60)
+#         print(f"\n=== 时间统计 ===")
+#         print(f"开始时间: {start_time}")
+#         print(f"结束时间: {end_time}")
+#         print(f"总时长: {hours}:{minutes:02d}:{seconds:02d} ({duration:.0f}秒)")
         
-        if total_distance_from_fit > 0:
-            avg_speed = total_distance_from_fit / duration * 3.6  # 转换为km/h
-            print(f"平均速度: {avg_speed:.1f} km/h")
+#         if total_distance_from_fit > 0:
+#             avg_speed = total_distance_from_fit / duration * 3.6  # 转换为km/h
+#             print(f"平均速度: {avg_speed:.1f} km/h")
     
-    # 返回结果
-    result = {
-        'file_path': file_path,
-        'records_count': len(records),
-        'distance_fit': total_distance_from_fit,  # 从FIT distance字段获取
-        'distance_gps': total_distance_from_gps,  # 从GPS计算
-        'distance_session': session_dist,  # 从session消息获取
-        'ascent_simple': simple_ascent,  # 简单累加
-        'ascent_threshold': threshold_ascent,  # 阈值过滤
-        'ascent_smoothed': smoothed_ascent,  # 平滑+阈值
-        'ascent_session': session_ascent,  # 从session消息获取
-        'start_time': timestamps[0] if timestamps else None,
-        'end_time': timestamps[-1] if timestamps else None,
-        'duration_seconds': (timestamps[-1] - timestamps[0]).total_seconds() if len(timestamps) >= 2 else 0
-    }
+#     # 返回结果
+#     result = {
+#         'file_path': file_path,
+#         'records_count': len(records),
+#         'distance_fit': total_distance_from_fit,  # 从FIT distance字段获取
+#         'distance_gps': total_distance_from_gps,  # 从GPS计算
+#         'distance_session': session_dist,  # 从session消息获取
+#         'ascent_simple': simple_ascent,  # 简单累加
+#         'ascent_threshold': threshold_ascent,  # 阈值过滤
+#         'ascent_smoothed': smoothed_ascent,  # 平滑+阈值
+#         'ascent_session': session_ascent,  # 从session消息获取
+#         'start_time': timestamps[0] if timestamps else None,
+#         'end_time': timestamps[-1] if timestamps else None,
+#         'duration_seconds': (timestamps[-1] - timestamps[0]).total_seconds() if len(timestamps) >= 2 else 0
+#     }
     
-    print("\n=== 结果汇总 ===")
-    print(f"建议使用的累计距离: {result['distance_fit']/1000:.2f} 公里 (来自FIT distance字段)")
+#     print("\n=== 结果汇总 ===")
+#     print(f"建议使用的累计距离: {result['distance_fit']/1000:.2f} 公里 (来自FIT distance字段)")
     
-    # 选择最可靠的累计爬升
-    if result['ascent_session'] is not None:
-        print(f"建议使用的累计爬升: {result['ascent_session']:.0f} 米 (来自FIT session字段)")
-    elif result['ascent_smoothed'] > 0:
-        print(f"建议使用的累计爬升: {result['ascent_smoothed']:.0f} 米 (平滑+阈值算法)")
-    else:
-        print(f"建议使用的累计爬升: {result['ascent_threshold']:.0f} 米 (阈值过滤算法)")
+#     # 选择最可靠的累计爬升
+#     if result['ascent_session'] is not None:
+#         print(f"建议使用的累计爬升: {result['ascent_session']:.0f} 米 (来自FIT session字段)")
+#     elif result['ascent_smoothed'] > 0:
+#         print(f"建议使用的累计爬升: {result['ascent_smoothed']:.0f} 米 (平滑+阈值算法)")
+#     else:
+#         print(f"建议使用的累计爬升: {result['ascent_threshold']:.0f} 米 (阈值过滤算法)")
     
-    return result
+#     return result
 
-# 测试代码
-if __name__ == "__main__":
-    # 修改为您的FIT文件路径
-    file_path = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-25-10-07-30.fit"
+# # 测试代码
+# if __name__ == "__main__":
+#     # 修改为您的FIT文件路径
+#     file_path = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-05-13-18-29-29.fit"
     
-    # 可调参数
-    smoothing_window = 5  # 滑动窗口大小
-    altitude_threshold = 0.5  # 最小海拔变化阈值(米)
+#     # 可调参数
+#     smoothing_window = 5  # 滑动窗口大小
+#     altitude_threshold = 0.5  # 最小海拔变化阈值(米)
     
-    result = analyze_fit_file_statistics(
-        file_path=file_path,
-        smoothing_window=smoothing_window,
-        altitude_threshold=altitude_threshold
-    )
+#     result = analyze_fit_file_statistics(
+#         file_path=file_path,
+#         smoothing_window=smoothing_window,
+#         altitude_threshold=altitude_threshold
+#     )
     
-    if result:
-        print("\n" + "="*50)
-        print("最终返回的字典:")
-        for key, value in result.items():
-            if key not in ['start_time', 'end_time']:
-                print(f"  {key}: {value}")
+#     if result:
+#         print("\n" + "="*50)
+#         print("最终返回的字典:")
+#         for key, value in result.items():
+#             if key not in ['start_time', 'end_time']:
+#                 print(f"  {key}: {value}")
 
 
-import os
-import numpy as np
-from fitparse import FitFile
-import json
-from datetime import datetime
-from collections import defaultdict
+# import os
+# import numpy as np
+# from fitparse import FitFile
+# import json
+# from datetime import datetime
+# from collections import defaultdict
 
-def analyze_fit_file(fit_path, lap_start=None, lap_end=None):
-    """
-    深度分析FIT文件的结构和数据内容
+# def analyze_fit_file(fit_path, lap_start=None, lap_end=None):
+#     """
+#     深度分析FIT文件的结构和数据内容
     
-    参数:
-    ----------
-    fit_path : str
-        FIT文件路径
-    lap_start : datetime, 可选
-        开始时间，用于筛选数据
-    lap_end : datetime, 可选
-        结束时间，用于筛选数据
+#     参数:
+#     ----------
+#     fit_path : str
+#         FIT文件路径
+#     lap_start : datetime, 可选
+#         开始时间，用于筛选数据
+#     lap_end : datetime, 可选
+#         结束时间，用于筛选数据
         
-    返回值:
-    ----------
-    dict
-        包含分析结果的字典
-    """
-    print(f"\n=== 开始分析FIT文件: {fit_path} ===")
+#     返回值:
+#     ----------
+#     dict
+#         包含分析结果的字典
+#     """
+#     print(f"\n=== 开始分析FIT文件: {fit_path} ===")
     
-    if not os.path.exists(fit_path):
-        print(f"错误: 文件不存在: {fit_path}")
-        return None
+#     if not os.path.exists(fit_path):
+#         print(f"错误: 文件不存在: {fit_path}")
+#         return None
     
-    try:
-        fit = FitFile(fit_path)
-    except Exception as e:
-        print(f"无法打开FIT文件: {e}")
-        return None
+#     try:
+#         fit = FitFile(fit_path)
+#     except Exception as e:
+#         print(f"无法打开FIT文件: {e}")
+#         return None
     
-    # 1. 收集所有消息类型
-    message_types = defaultdict(int)
-    message_fields = defaultdict(set)
-    all_fields = set()
+#     # 1. 收集所有消息类型
+#     message_types = defaultdict(int)
+#     message_fields = defaultdict(set)
+#     all_fields = set()
     
-    print("\n=== 消息类型统计 ===")
-    for message in fit.get_messages():
-        message_type = message.name
-        message_types[message_type] += 1
+#     print("\n=== 消息类型统计 ===")
+#     for message in fit.get_messages():
+#         message_type = message.name
+#         message_types[message_type] += 1
         
-        # 收集这个消息类型的所有字段
-        for field in message:
-            field_name = field.name
-            message_fields[message_type].add(field_name)
-            all_fields.add(field_name)
+#         # 收集这个消息类型的所有字段
+#         for field in message:
+#             field_name = field.name
+#             message_fields[message_type].add(field_name)
+#             all_fields.add(field_name)
     
-    # 打印消息类型统计
-    for msg_type, count in sorted(message_types.items()):
-        print(f"{msg_type}: {count}条")
+#     # 打印消息类型统计
+#     for msg_type, count in sorted(message_types.items()):
+#         print(f"{msg_type}: {count}条")
     
-    # 2. 专门分析'record'消息，查找海拔相关字段
-    print("\n=== 记录消息(record)字段分析 ===")
-    record_fields = defaultdict(list)
-    altitude_variants = ['altitude', 'enhanced_altitude', 'gps_altitude', 'height', 'elevation']
-    found_altitude = False
-    altitude_data = []
+#     # 2. 专门分析'record'消息，查找海拔相关字段
+#     print("\n=== 记录消息(record)字段分析 ===")
+#     record_fields = defaultdict(list)
+#     altitude_variants = ['altitude', 'enhanced_altitude', 'gps_altitude', 'height', 'elevation']
+#     found_altitude = False
+#     altitude_data = []
     
-    record_count = 0
-    for message in fit.get_messages('record'):
-        record_count += 1
-        values = message.get_values()
+#     record_count = 0
+#     for message in fit.get_messages('record'):
+#         record_count += 1
+#         values = message.get_values()
         
-        # 检查所有可能的海拔字段
-        for alt_field in altitude_variants:
-            if alt_field in values:
-                found_altitude = True
-                alt_value = values[alt_field]
-                altitude_data.append(alt_value)
-                if alt_field not in record_fields:
-                    record_fields[alt_field] = []
-                record_fields[alt_field].append(alt_value)
+#         # 检查所有可能的海拔字段
+#         for alt_field in altitude_variants:
+#             if alt_field in values:
+#                 found_altitude = True
+#                 alt_value = values[alt_field]
+#                 altitude_data.append(alt_value)
+#                 if alt_field not in record_fields:
+#                     record_fields[alt_field] = []
+#                 record_fields[alt_field].append(alt_value)
         
-        # 收集所有字段
-        for field_name, field_value in values.items():
-            if field_name not in record_fields:
-                record_fields[field_name] = [field_value]
-            else:
-                record_fields[field_name].append(field_value)
+#         # 收集所有字段
+#         for field_name, field_value in values.items():
+#             if field_name not in record_fields:
+#                 record_fields[field_name] = [field_value]
+#             else:
+#                 record_fields[field_name].append(field_value)
     
-    print(f"记录消息总数: {record_count}")
+#     print(f"记录消息总数: {record_count}")
     
-    # 3. 查找海拔相关字段
-    print("\n=== 海拔数据搜索 ===")
-    altitude_fields_found = []
-    for field_name in altitude_variants:
-        if field_name in record_fields:
-            altitude_fields_found.append(field_name)
-            data = record_fields[field_name]
-            valid_data = [d for d in data if d is not None]
-            print(f"找到字段 '{field_name}':")
-            print(f"  数据点数: {len(data)}")
-            print(f"  非空点数: {len(valid_data)}")
-            if valid_data:
-                print(f"  最小值: {min(valid_data):.2f}")
-                print(f"  最大值: {max(valid_data):.2f}")
-                print(f"  平均值: {np.mean(valid_data):.2f}")
+#     # 3. 查找海拔相关字段
+#     print("\n=== 海拔数据搜索 ===")
+#     altitude_fields_found = []
+#     for field_name in altitude_variants:
+#         if field_name in record_fields:
+#             altitude_fields_found.append(field_name)
+#             data = record_fields[field_name]
+#             valid_data = [d for d in data if d is not None]
+#             print(f"找到字段 '{field_name}':")
+#             print(f"  数据点数: {len(data)}")
+#             print(f"  非空点数: {len(valid_data)}")
+#             if valid_data:
+#                 print(f"  最小值: {min(valid_data):.2f}")
+#                 print(f"  最大值: {max(valid_data):.2f}")
+#                 print(f"  平均值: {np.mean(valid_data):.2f}")
     
-    if not altitude_fields_found:
-        print("未找到标准海拔字段，正在搜索其他可能的海拔相关字段...")
+#     if not altitude_fields_found:
+#         print("未找到标准海拔字段，正在搜索其他可能的海拔相关字段...")
         
-        # 搜索包含"alt"的字段
-        alt_related = [f for f in record_fields.keys() if 'alt' in f.lower()]
-        if alt_related:
-            print(f"找到可能的海拔相关字段: {alt_related}")
-            for field in alt_related:
-                data = record_fields[field]
-                valid_data = [d for d in data if d is not None]
-                print(f"  '{field}': {len(valid_data)}个有效值")
-        else:
-            print("未找到任何海拔相关字段")
+#         # 搜索包含"alt"的字段
+#         alt_related = [f for f in record_fields.keys() if 'alt' in f.lower()]
+#         if alt_related:
+#             print(f"找到可能的海拔相关字段: {alt_related}")
+#             for field in alt_related:
+#                 data = record_fields[field]
+#                 valid_data = [d for d in data if d is not None]
+#                 print(f"  '{field}': {len(valid_data)}个有效值")
+#         else:
+#             print("未找到任何海拔相关字段")
     
-    # 4. 分析时间范围
-    print("\n=== 时间范围分析 ===")
-    if 'timestamp' in record_fields:
-        timestamps = record_fields['timestamp']
-        if timestamps:
-            first_time = min(timestamps)
-            last_time = max(timestamps)
-            duration = (last_time - first_time).total_seconds()
-            print(f"第一条记录: {first_time}")
-            print(f"最后一条记录: {last_time}")
-            print(f"总时长: {duration:.1f}秒 ({duration/60:.1f}分钟)")
+#     # 4. 分析时间范围
+#     print("\n=== 时间范围分析 ===")
+#     if 'timestamp' in record_fields:
+#         timestamps = record_fields['timestamp']
+#         if timestamps:
+#             first_time = min(timestamps)
+#             last_time = max(timestamps)
+#             duration = (last_time - first_time).total_seconds()
+#             print(f"第一条记录: {first_time}")
+#             print(f"最后一条记录: {last_time}")
+#             print(f"总时长: {duration:.1f}秒 ({duration/60:.1f}分钟)")
             
-            if lap_start and lap_end:
-                print(f"\n指定时间范围: {lap_start} 到 {lap_end}")
-                in_range = [t for t in timestamps if lap_start <= t <= lap_end]
-                print(f"在指定时间范围内的记录数: {len(in_range)}")
+#             if lap_start and lap_end:
+#                 print(f"\n指定时间范围: {lap_start} 到 {lap_end}")
+#                 in_range = [t for t in timestamps if lap_start <= t <= lap_end]
+#                 print(f"在指定时间范围内的记录数: {len(in_range)}")
     
-    # 5. 分析其他重要字段
-    print("\n=== 其他重要数据字段 ===")
-    important_fields = ['position_lat', 'position_long', 'speed', 'enhanced_speed', 
-                       'power', 'heart_rate', 'cadence', 'distance']
+#     # 5. 分析其他重要字段
+#     print("\n=== 其他重要数据字段 ===")
+#     important_fields = ['position_lat', 'position_long', 'speed', 'enhanced_speed', 
+#                        'power', 'heart_rate', 'cadence', 'distance']
     
-    for field in important_fields:
-        if field in record_fields:
-            data = record_fields[field]
-            valid_data = [d for d in data if d is not None]
-            if valid_data:
-                if field in ['position_lat', 'position_long']:
-                    # 这些是semicircles，需要转换
-                    print(f"{field}: {len(valid_data)}个有效值 (单位: semicircles)")
-                else:
-                    print(f"{field}: {len(valid_data)}个有效值")
+#     for field in important_fields:
+#         if field in record_fields:
+#             data = record_fields[field]
+#             valid_data = [d for d in data if d is not None]
+#             if valid_data:
+#                 if field in ['position_lat', 'position_long']:
+#                     # 这些是semicircles，需要转换
+#                     print(f"{field}: {len(valid_data)}个有效值 (单位: semicircles)")
+#                 else:
+#                     print(f"{field}: {len(valid_data)}个有效值")
     
-    # 6. 输出所有字段的摘要
-    print("\n=== 所有字段摘要 ===")
-    print(f"总字段数: {len(record_fields)}")
-    print("字段列表:")
-    for i, field_name in enumerate(sorted(record_fields.keys())):
-        data = record_fields[field_name]
-        valid_count = sum(1 for d in data if d is not None)
-        sample_value = next((d for d in data if d is not None), None)
-        value_type = type(sample_value).__name__ if sample_value is not None else "None"
-        print(f"  {i+1:2d}. {field_name:20s}: {valid_count:4d}有效/{len(data):4d}总数, 类型: {value_type}")
+#     # 6. 输出所有字段的摘要
+#     print("\n=== 所有字段摘要 ===")
+#     print(f"总字段数: {len(record_fields)}")
+#     print("字段列表:")
+#     for i, field_name in enumerate(sorted(record_fields.keys())):
+#         data = record_fields[field_name]
+#         valid_count = sum(1 for d in data if d is not None)
+#         sample_value = next((d for d in data if d is not None), None)
+#         value_type = type(sample_value).__name__ if sample_value is not None else "None"
+#         print(f"  {i+1:2d}. {field_name:20s}: {valid_count:4d}有效/{len(data):4d}总数, 类型: {value_type}")
     
-    # 7. 保存分析结果到文件
-    output_file = "fit_analysis_report.txt"
-    with open(output_file, 'w', encoding='utf-8') as f:
-        f.write(f"FIT文件分析报告: {fit_path}\n")
-        f.write(f"分析时间: {datetime.now()}\n\n")
+#     # 7. 保存分析结果到文件
+#     output_file = "fit_analysis_report.txt"
+#     with open(output_file, 'w', encoding='utf-8') as f:
+#         f.write(f"FIT文件分析报告: {fit_path}\n")
+#         f.write(f"分析时间: {datetime.now()}\n\n")
         
-        f.write("=== 消息类型统计 ===\n")
-        for msg_type, count in sorted(message_types.items()):
-            f.write(f"{msg_type}: {count}条\n")
+#         f.write("=== 消息类型统计 ===\n")
+#         for msg_type, count in sorted(message_types.items()):
+#             f.write(f"{msg_type}: {count}条\n")
         
-        f.write(f"\n=== 记录消息字段数: {len(record_fields)} ===\n")
-        for field_name in sorted(record_fields.keys()):
-            data = record_fields[field_name]
-            valid_count = sum(1 for d in data if d is not None)
-            f.write(f"{field_name}: {valid_count}有效/{len(data)}总数\n")
+#         f.write(f"\n=== 记录消息字段数: {len(record_fields)} ===\n")
+#         for field_name in sorted(record_fields.keys()):
+#             data = record_fields[field_name]
+#             valid_count = sum(1 for d in data if d is not None)
+#             f.write(f"{field_name}: {valid_count}有效/{len(data)}总数\n")
     
-    print(f"\n详细分析报告已保存到: {output_file}")
+#     print(f"\n详细分析报告已保存到: {output_file}")
     
-    # 返回分析结果
-    result = {
-        'file_path': fit_path,
-        'record_count': record_count,
-        'message_types': dict(message_types),
-        'record_fields': {k: len(v) for k, v in record_fields.items()},
-        'altitude_fields_found': altitude_fields_found,
-        'all_fields': list(all_fields)
-    }
+#     # 返回分析结果
+#     result = {
+#         'file_path': fit_path,
+#         'record_count': record_count,
+#         'message_types': dict(message_types),
+#         'record_fields': {k: len(v) for k, v in record_fields.items()},
+#         'altitude_fields_found': altitude_fields_found,
+#         'all_fields': list(all_fields)
+#     }
     
-    return result
+#     return result
 
-def test_fit_loading(fit_path, sample_count=5):
-    """
-    测试FIT文件加载并显示样本数据
-    """
-    print(f"\n=== 测试加载: {fit_path} ===")
+# def test_fit_loading(fit_path, sample_count=5):
+#     """
+#     测试FIT文件加载并显示样本数据
+#     """
+#     print(f"\n=== 测试加载: {fit_path} ===")
     
-    try:
-        fit = FitFile(fit_path)
-    except Exception as e:
-        print(f"无法打开FIT文件: {e}")
-        return
+#     try:
+#         fit = FitFile(fit_path)
+#     except Exception as e:
+#         print(f"无法打开FIT文件: {e}")
+#         return
     
-    # 获取前几个记录消息
-    records = []
-    for i, message in enumerate(fit.get_messages('record')):
-        if i >= sample_count:
-            break
-        records.append(message.get_values())
+#     # 获取前几个记录消息
+#     records = []
+#     for i, message in enumerate(fit.get_messages('record')):
+#         if i >= sample_count:
+#             break
+#         records.append(message.get_values())
     
-    print(f"前{sample_count}条记录消息:")
-    for i, rec in enumerate(records):
-        print(f"\n记录 {i+1}:")
-        for key, value in rec.items():
-            print(f"  {key}: {value}")
+#     print(f"前{sample_count}条记录消息:")
+#     for i, rec in enumerate(records):
+#         print(f"\n记录 {i+1}:")
+#         for key, value in rec.items():
+#             print(f"  {key}: {value}")
     
-    return records
+#     return records
 
-if __name__ == "__main__":
-    # 使用您的FIT文件路径
-    FIT_PATH = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-25-10-07-30.fit"
+# if __name__ == "__main__":
+#     # 使用您的FIT文件路径
+#     FIT_PATH = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-05-07-14-41-34.fit"
     
-    # 分析整个文件
-    result = analyze_fit_file(FIT_PATH)
+#     # 分析整个文件
+#     result = analyze_fit_file(FIT_PATH)
     
-    if result:
-        print("\n=== 分析完成 ===")
-        print(f"找到海拔字段: {result.get('altitude_fields_found', [])}")
+#     if result:
+#         print("\n=== 分析完成 ===")
+#         print(f"找到海拔字段: {result.get('altitude_fields_found', [])}")
         
-        # 如果找到了海拔字段，测试数据加载
-        if result.get('altitude_fields_found'):
-            print("\n正在测试海拔数据加载...")
-            fit = FitFile(FIT_PATH)
+#         # 如果找到了海拔字段，测试数据加载
+#         if result.get('altitude_fields_found'):
+#             print("\n正在测试海拔数据加载...")
+#             fit = FitFile(FIT_PATH)
             
-            # 收集所有海拔数据
-            all_altitudes = []
-            for message in fit.get_messages('record'):
-                values = message.get_values()
-                for alt_field in result['altitude_fields_found']:
-                    if alt_field in values and values[alt_field] is not None:
-                        all_altitudes.append(values[alt_field])
+#             # 收集所有海拔数据
+#             all_altitudes = []
+#             for message in fit.get_messages('record'):
+#                 values = message.get_values()
+#                 for alt_field in result['altitude_fields_found']:
+#                     if alt_field in values and values[alt_field] is not None:
+#                         all_altitudes.append(values[alt_field])
             
-            if all_altitudes:
-                print(f"海拔数据统计:")
-                print(f"  数据点数: {len(all_altitudes)}")
-                print(f"  最小值: {min(all_altitudes):.2f}")
-                print(f"  最大值: {max(all_altitudes):.2f}")
-                print(f"  平均值: {np.mean(all_altitudes):.2f}")
-                print(f"  单位: 可能是米(m)，但需要确认")
+#             if all_altitudes:
+#                 print(f"海拔数据统计:")
+#                 print(f"  数据点数: {len(all_altitudes)}")
+#                 print(f"  最小值: {min(all_altitudes):.2f}")
+#                 print(f"  最大值: {max(all_altitudes):.2f}")
+#                 print(f"  平均值: {np.mean(all_altitudes):.2f}")
+#                 print(f"  单位: 可能是米(m)，但需要确认")
 
 
-# peak_times = parse_fit_file(file_path)
-# print_all_laps_and_events(file_path)
+#peak_times = parse_fit_file(file_path)
+print_all_laps_and_events(file_path)
 #result = analyze_fit_file_statistics(file_path)
