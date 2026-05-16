@@ -1274,7 +1274,7 @@ if __name__ == "__main__":
         lap_end=lap_end,
         generate_hud=False,         # 是否生成HUD视频
         generate_map=False,         # 是否生成地图视频
-        generate_elevation=True     # 是否生成海拔视频
+        generate_elevation=False    # 是否生成海拔视频
     )
     
     print("\n" + "="*50)
