@@ -1,0 +1,732 @@
+import os
+import sys
+import glob
+import time
+import subprocess
+import shutil
+import threading
+from datetime import datetime, timedelta
+from fitparse import FitFile
+import cv2
+import numpy as np
+from scipy.interpolate import interp1d
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+import traceback
+
+# ==================== 用户可配置参数 ====================
+# FIT文件路径（设置为None则自动查找最新文件）
+FIT_PATH = None
+#FIT_PATH = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-25-10-07-30.fit"
+
+# 输出视频参数
+FPS_TIME = 1  # 时间视频帧率（1秒1帧）
+FPS_DISTANCE = 5  # 距离视频帧率（可调整）
+OUTPUT_DIR_TIME = "frames_timestamp"  # 时间帧目录
+OUTPUT_DIR_DISTANCE = "frames_distance"  # 距离帧目录
+timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+OUTPUT_VIDEO_TIME = f"timestamp_overlay_{timestamp}.mov"  # 时间视频文件名
+OUTPUT_VIDEO_DISTANCE = f"distance_overlay_{timestamp}.mov"  # 距离视频文件名
+
+# 时区设置（北京时间 = UTC+8）
+TIMEZONE_OFFSET = 8  # 小时
+
+# 时间显示样式
+TIME_FONT_SIZE = 60
+TIME_FONT_COLOR = (255, 165, 0)  # 橙色
+TIME_OUTLINE_WIDTH = 2
+#TIME_OUTLINE_COLOR = (255, 255, 255)  # 白色
+TIME_OUTLINE_COLOR = (0, 0, 0)  # 黑色
+
+# 距离显示样式
+DIST_FONT_SIZE = 50
+#DIST_FONT_COLOR = (0, 255, 255)  # 青色
+DIST_FONT_COLOR = (255, 255, 255)  # 白色
+DIST_OUTLINE_WIDTH = 5
+DIST_OUTLINE_COLOR = (0, 0, 0)  # 黑色
+
+# 视频尺寸设置（设置为None则自动计算）
+VIDEO_WIDTH = None
+VIDEO_HEIGHT = None
+VIDEO_PADDING = 30  # 像素，文本周围的边距
+
+# 字体文件路径
+FONT_PATH = None
+
+# 平滑插值参数
+SMOOTHING_WINDOW = 5  # 平滑窗口大小（帧数）
+
+# 默认生成选项
+GENERATE_TIME_VIDEO = True
+GENERATE_DISTANCE_VIDEO = True
+# =====================================================
+
+def find_latest_fit_file():
+    """查找当前目录下最新的.fit文件"""
+    fit_files = glob.glob("*.fit")
+    
+    if not fit_files:
+        fit_files = glob.glob("**/*.fit", recursive=True)
+    
+    if not fit_files:
+        return None
+    
+    fit_files.sort(key=os.path.getmtime, reverse=True)
+    latest_fit = os.path.abspath(fit_files[0])
+    print(f"找到最新的FIT文件: {latest_fit}")
+    return latest_fit
+
+def get_all_laps(fit_path):
+    """获取fit文件中的所有lap信息"""
+    print(f"正在读取FIT文件: {fit_path}")
+    fit = FitFile(fit_path)
+    
+    laps = []
+    print("\n=== FIT文件中的Lap信息 ===")
+    
+    for i, lap in enumerate(fit.get_messages("lap")):
+        vals = lap.get_values()
+        start_time = vals.get("start_time")
+        elapsed = vals.get("total_elapsed_time")
+        trigger = vals.get("lap_trigger")
+        total_distance = vals.get("total_distance", 0.0)
+        
+        if start_time is not None and elapsed is not None:
+            end_time = start_time + timedelta(seconds=elapsed)
+            
+            lap_info = {
+                "index": i + 1,
+                "start_time": start_time,
+                "end_time": end_time,
+                "elapsed_seconds": elapsed,
+                "total_distance": total_distance,
+                "trigger": trigger
+            }
+            laps.append(lap_info)
+            
+            start_beijing = start_time + timedelta(hours=TIMEZONE_OFFSET)
+            end_beijing = end_time + timedelta(hours=TIMEZONE_OFFSET)
+            
+            print(f"[Lap {i+1}]")
+            print(f"  开始时间(UTC): {start_time}")
+            print(f"  开始时间(北京): {start_beijing}")
+            print(f"  结束时间(北京): {end_beijing.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"  持续时间: {elapsed:.1f}秒 ({elapsed//60}分{elapsed%60:.0f}秒)")
+            print(f"  总距离: {total_distance/1000:.2f}km")
+            print(f"  触发类型: {trigger}")
+            print(f"  {'-'*40}")
+    
+    if not laps:
+        print("未找到Lap信息")
+    
+    return laps
+
+def select_laps_for_generation(laps):
+    """让用户选择要生成的lap"""
+    if not laps:
+        print("没有可用的Lap信息")
+        return None
+    
+    print("\n请选择要生成视频的Lap（输入序号，多个用逗号分隔，q退出）:")
+    for lap in laps:
+        start_beijing = lap['start_time'] + timedelta(hours=TIMEZONE_OFFSET)
+        print(f"{lap['index']}. Lap {lap['index']} ({lap['elapsed_seconds']:.1f}秒, {start_beijing.strftime('%H:%M:%S')})")
+    
+    while True:
+        choice = input("请输入选择: ").strip()
+        
+        if choice.lower() == 'q':
+            return None
+        
+        if choice:
+            try:
+                selected_indices = [int(idx.strip()) for idx in choice.split(',')]
+                selected_laps = []
+                selected_start = None
+                selected_end = None
+                
+                for idx in selected_indices:
+                    if 1 <= idx <= len(laps):
+                        lap = laps[idx-1]
+                        selected_laps.append(lap)
+                        
+                        if selected_start is None or lap['start_time'] < selected_start:
+                            selected_start = lap['start_time']
+                        if selected_end is None or lap['end_time'] > selected_end:
+                            selected_end = lap['end_time']
+                    else:
+                        print(f"警告: Lap {idx} 不存在，跳过")
+                
+                if selected_laps:
+                    start_beijing = selected_start + timedelta(hours=TIMEZONE_OFFSET)
+                    end_beijing = selected_end + timedelta(hours=TIMEZONE_OFFSET)
+                    
+                    print(f"\n已选择 {len(selected_laps)} 个Lap:")
+                    for lap in selected_laps:
+                        lap_start_beijing = lap['start_time'] + timedelta(hours=TIMEZONE_OFFSET)
+                        lap_end_beijing = lap['end_time'] + timedelta(hours=TIMEZONE_OFFSET)
+                        print(f"  Lap {lap['index']}: {lap_start_beijing} 到 {lap_end_beijing}")
+                    print(f"合并时间范围: {start_beijing} 到 {end_beijing}")
+                    return selected_start, selected_end, selected_laps
+                else:
+                    print("没有有效的选择")
+            except ValueError:
+                print("输入无效，请重新输入")
+
+def get_video_selection():
+    """让用户选择生成哪种视频"""
+    print("\n请选择要生成的视频类型:")
+    print("1. 只生成时间戳视频")
+    print("2. 只生成距离视频")
+    print("3. 两个都生成")
+    print("q. 退出")
+    
+    while True:
+        choice = input("请输入选择 (1/2/3/q): ").strip().lower()
+        
+        if choice == 'q':
+            return None, None
+        elif choice == '1':
+            return True, False
+        elif choice == '2':
+            return False, True
+        elif choice == '3':
+            return True, True
+        else:
+            print("输入无效，请重新输入")
+
+def get_fit_path():
+    """获取FIT文件路径"""
+    if FIT_PATH is None:
+        print("未指定FIT_PATH，正在查找当前目录下最新的.fit文件...")
+        fit_path = find_latest_fit_file()
+        if fit_path is None:
+            print("❌ 未找到任何.fit文件")
+            return None
+        return fit_path
+    else:
+        if not os.path.exists(FIT_PATH):
+            print(f"❌ 找不到指定的FIT文件: {FIT_PATH}")
+            return None
+        return os.path.abspath(FIT_PATH)
+
+def load_fit_data(fit_path, lap_start, lap_end):
+    """加载FIT文件数据"""
+    print(f"\n[数据加载] 加载FIT数据，时间范围: {lap_start} 到 {lap_end}")
+    fit = FitFile(fit_path)
+    
+    times, distances = [], []
+    first_valid_distance = None
+    
+    for m in fit.get_messages('record'):
+        vals = m.get_values()
+        if 'timestamp' in vals and 'distance' in vals:
+            ts = vals['timestamp']
+            if lap_start <= ts <= lap_end:
+                distance_m = vals['distance']
+                if distance_m is not None:
+                    if first_valid_distance is None:
+                        first_valid_distance = distance_m
+                    # 重置距离，从0开始
+                    relative_distance = distance_m - first_valid_distance
+                    times.append(ts)
+                    distances.append(relative_distance)
+    
+    if not times:
+        print("❌ 在指定时间范围内没有找到距离数据")
+        return None, None
+    
+    print(f"[数据加载] 找到 {len(times)} 个有效数据点")
+    print(f"[数据加载] 距离范围: {min(distances):.2f}m 到 {max(distances):.2f}m")
+    
+    return times, distances
+
+def interpolate_distance(times, distances, start_time, end_time, fps):
+    """对距离数据进行平滑插值"""
+    print(f"\n[数据插值] 开始插值，目标帧率: {fps} FPS")
+    
+    # 计算时间偏移（秒）
+    time_offsets = [(t - start_time).total_seconds() for t in times]
+    duration = (end_time - start_time).total_seconds()
+    
+    # 生成插值时间点
+    interp_times = np.linspace(0, duration, int(duration * fps) + 1)
+    
+    if len(time_offsets) < 2:
+        print("❌ 数据点不足，无法进行插值")
+        return None
+    
+    # 使用线性插值
+    interp_func = interp1d(time_offsets, distances, kind='linear', 
+                          fill_value="extrapolate", bounds_error=False)
+    interp_distances = interp_func(interp_times)
+    
+    # 确保距离不会减少（单调递增）
+    for i in range(1, len(interp_distances)):
+        if interp_distances[i] < interp_distances[i-1]:
+            interp_distances[i] = interp_distances[i-1]
+    
+    print(f"[数据插值] 生成 {len(interp_times)} 个插值点")
+    print(f"[数据插值] 距离范围: {min(interp_distances):.2f}m 到 {max(interp_distances):.2f}m")
+    
+    return interp_times, interp_distances
+
+def load_font(font_size):
+    """加载字体"""
+    try:
+        if FONT_PATH and os.path.exists(FONT_PATH):
+            font = ImageFont.truetype(FONT_PATH, font_size)
+        else:
+            try:
+                font = ImageFont.truetype("arial.ttf", font_size)
+            except:
+                try:
+                    font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+                except:
+                    font = ImageFont.load_default()
+                    print("⚠️ 使用PIL默认字体")
+    except Exception as e:
+        print(f"⚠️ 字体加载失败: {e}，使用默认字体")
+        font = ImageFont.load_default()
+    
+    return font
+
+def calculate_text_size(text, font):
+    """计算文本尺寸"""
+    temp_img = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+    temp_draw = ImageDraw.Draw(temp_img)
+    bbox = temp_draw.textbbox((0, 0), text, font=font)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    return width, height
+
+def calculate_video_dimensions(time_font, dist_font=None, max_time_text="9999-12-31 23:59:59", 
+                              max_dist_text="999.999 km"):
+    """计算视频尺寸"""
+    # 计算时间文本尺寸
+    time_width, time_height = calculate_text_size(max_time_text, time_font)
+    time_width += TIME_OUTLINE_WIDTH * 2
+    time_height += TIME_OUTLINE_WIDTH * 2
+    
+    # 计算距离文本尺寸
+    if dist_font:
+        dist_width, dist_height = calculate_text_size(max_dist_text, dist_font)
+        dist_width += DIST_OUTLINE_WIDTH * 2
+        dist_height += DIST_OUTLINE_WIDTH * 2
+        # 取最大宽度
+        text_width = max(time_width, dist_width)
+        text_height = time_height + dist_height + 20  # 加上间距
+    else:
+        text_width = time_width
+        text_height = time_height
+    
+    # 计算最终尺寸
+    if VIDEO_WIDTH is None or VIDEO_HEIGHT is None:
+        width = int(text_width + VIDEO_PADDING * 2)
+        height = int(text_height + VIDEO_PADDING * 2)
+        
+        # 确保宽高是偶数
+        if width % 2 != 0:
+            width += 1
+        if height % 2 != 0:
+            height += 1
+        
+        print(f"自动计算视频尺寸: {width}x{height}")
+    else:
+        width, height = VIDEO_WIDTH, VIDEO_HEIGHT
+        print(f"使用指定视频尺寸: {width}x{height}")
+    
+    return width, height
+
+def create_time_frame(timestamp_str, width, height, time_font):
+    """创建时间戳帧"""
+    image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    
+    # 计算文本尺寸和位置
+    text_width, text_height = calculate_text_size(timestamp_str, time_font)
+    x = (width - text_width) / 2
+    y = (height - text_height) / 2 - 20  # 稍微上移，为距离留出空间
+    
+    # 绘制描边
+    if TIME_OUTLINE_WIDTH > 0:
+        for dx in [-TIME_OUTLINE_WIDTH, 0, TIME_OUTLINE_WIDTH]:
+            for dy in [-TIME_OUTLINE_WIDTH, 0, TIME_OUTLINE_WIDTH]:
+                if dx == 0 and dy == 0:
+                    continue
+                draw.text((x + dx, y + dy), timestamp_str, font=time_font, fill=TIME_OUTLINE_COLOR)
+    
+    # 绘制主文本
+    draw.text((x, y), timestamp_str, font=time_font, fill=TIME_FONT_COLOR)
+    
+    return image
+
+def create_distance_frame(distance_km, width, height, dist_font):
+    """创建距离帧"""
+    image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    
+    # 格式化距离文本
+    distance_text = f" {distance_km:.2f} km"
+    
+    # 计算文本尺寸和位置
+    text_width, text_height = calculate_text_size(distance_text, dist_font)
+    x = (width - text_width) / 2
+    y = (height - text_height) / 2 + 20  # 稍微下移，为时间留出空间
+    
+    # 绘制描边
+    if DIST_OUTLINE_WIDTH > 0:
+        for dx in [-DIST_OUTLINE_WIDTH, 0, DIST_OUTLINE_WIDTH]:
+            for dy in [-DIST_OUTLINE_WIDTH, 0, DIST_OUTLINE_WIDTH]:
+                if dx == 0 and dy == 0:
+                    continue
+                draw.text((x + dx, y + dy), distance_text, font=dist_font, fill=DIST_OUTLINE_COLOR)
+    
+    # 绘制主文本
+    draw.text((x, y), distance_text, font=dist_font, fill=DIST_FONT_COLOR)
+    
+    return image
+
+def generate_time_frames(lap_start, lap_end, width, height, time_font):
+    """生成时间戳帧序列"""
+    print(f"\n[时间视频] 开始生成时间戳帧...")
+    
+    # 清理临时目录
+    if os.path.exists(OUTPUT_DIR_TIME):
+        shutil.rmtree(OUTPUT_DIR_TIME)
+    os.makedirs(OUTPUT_DIR_TIME, exist_ok=True)
+    
+    # 计算总时长和总帧数
+    duration = (lap_end - lap_start).total_seconds()
+    total_frames = int(duration * FPS_TIME)
+    
+    print(f"[时间视频] 时间范围: {lap_start} 到 {lap_end}")
+    print(f"[时间视频] 时长: {duration:.2f}秒")
+    print(f"[时间视频] 帧率: {FPS_TIME} FPS")
+    print(f"[时间视频] 总帧数: {total_frames}")
+    print(f"[时间视频] 视频尺寸: {width}x{height}")
+    
+    start_time = time.time()
+    last_print_time = start_time
+    frame_count = 0
+    
+    for i in range(total_frames):
+        # 计算当前时间点
+        current_time_utc = lap_start + timedelta(seconds=i / FPS_TIME)
+        
+        # 转换为北京时间
+        current_time_beijing = current_time_utc + timedelta(hours=TIMEZONE_OFFSET)
+        
+        # 格式化时间字符串
+        timestamp_str = current_time_beijing.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 创建帧
+        frame = create_time_frame(timestamp_str, width, height, time_font)
+        
+        # 保存帧
+        frame_path = os.path.join(OUTPUT_DIR_TIME, f"frame_{i:06d}.png")
+        frame.save(frame_path, 'PNG')
+        
+        frame_count += 1
+        
+        # 打印进度
+        current_time = time.time()
+        if current_time - last_print_time >= 5:
+            elapsed = current_time - start_time
+            fps_actual = frame_count / elapsed if elapsed > 0 else 0
+            remaining_frames = total_frames - frame_count
+            remaining_time = remaining_frames / fps_actual if fps_actual > 0 else 0
+            
+            print(f"[时间进度] {frame_count}/{total_frames}帧 "
+                  f"({frame_count/total_frames*100:.1f}%) | "
+                  f"速度: {fps_actual:.1f}帧/秒 | "
+                  f"剩余: {remaining_time:.1f}秒")
+            last_print_time = current_time
+    
+    print(f"✅ 时间帧生成完成: {frame_count}帧")
+    return frame_count
+
+def generate_distance_frames(interp_times, interp_distances, width, height, dist_font):
+    """生成距离帧序列"""
+    print(f"\n[距离视频] 开始生成距离帧...")
+    
+    # 清理临时目录
+    if os.path.exists(OUTPUT_DIR_DISTANCE):
+        shutil.rmtree(OUTPUT_DIR_DISTANCE)
+    os.makedirs(OUTPUT_DIR_DISTANCE, exist_ok=True)
+    
+    total_frames = len(interp_times)
+    
+    print(f"[距离视频] 总帧数: {total_frames}")
+    print(f"[距离视频] 帧率: {FPS_DISTANCE} FPS")
+    print(f"[距离视频] 视频尺寸: {width}x{height}")
+    print(f"[距离视频] 距离范围: {min(interp_distances)/1000:.2f}km 到 {max(interp_distances)/1000:.2f}km")
+    
+    start_time = time.time()
+    last_print_time = start_time
+    frame_count = 0
+    
+    for i in range(total_frames):
+        # 获取当前距离（转换为km）
+        distance_km = interp_distances[i] / 1000.0
+        
+        # 创建帧
+        frame = create_distance_frame(distance_km, width, height, dist_font)
+        
+        # 保存帧
+        frame_path = os.path.join(OUTPUT_DIR_DISTANCE, f"frame_{i:06d}.png")
+        frame.save(frame_path, 'PNG')
+        
+        frame_count += 1
+        
+        # 打印进度
+        current_time = time.time()
+        if current_time - last_print_time >= 5:
+            elapsed = current_time - start_time
+            fps_actual = frame_count / elapsed if elapsed > 0 else 0
+            remaining_frames = total_frames - frame_count
+            remaining_time = remaining_frames / fps_actual if fps_actual > 0 else 0
+            
+            print(f"[距离进度] {frame_count}/{total_frames}帧 "
+                  f"({frame_count/total_frames*100:.1f}%) | "
+                  f"速度: {fps_actual:.1f}帧/秒 | "
+                  f"剩余: {remaining_time:.1f}秒")
+            last_print_time = current_time
+    
+    print(f"✅ 距离帧生成完成: {frame_count}帧")
+    return frame_count
+
+def compile_video(frame_dir, output_file, frame_count, width, height, fps, prefix="frame_"):
+    """将帧合成为视频"""
+    print(f"\n[视频合成] 开始合成视频: {output_file}")
+    
+    if frame_count == 0:
+        print("❌ 没有帧可合成")
+        return False
+    
+    # 检查ffmpeg是否可用
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("❌ 未找到ffmpeg，请先安装ffmpeg")
+        return False
+    
+    # 构建ffmpeg命令
+    ffmpeg_cmd = [
+        "ffmpeg", "-y",
+        "-framerate", str(fps),
+        "-start_number", "0",
+        "-i", os.path.join(frame_dir, f"{prefix}%06d.png"),
+        "-vf", f"scale={width}:{height},setsar=1",
+        "-c:v", "prores_ks",
+        "-profile:v", "4444",
+        "-pix_fmt", "yuva444p10le",
+        "-frames:v", str(frame_count),
+        output_file
+    ]
+    
+    try:
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print(f"✅ 视频生成成功: {output_file}")
+            if os.path.exists(output_file):
+                file_size = os.path.getsize(output_file) / (1024 * 1024)
+                print(f"文件大小: {file_size:.2f} MB")
+            return True
+        else:
+            print(f"❌ ffmpeg执行失败: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ 视频合成失败: {e}")
+        return False
+
+def cleanup():
+    """清理临时文件"""
+    dirs_to_clean = [OUTPUT_DIR_TIME, OUTPUT_DIR_DISTANCE]
+    for dir_path in dirs_to_clean:
+        if os.path.exists(dir_path):
+            shutil.rmtree(dir_path)
+            print(f"已清理临时目录: {dir_path}")
+
+def main():
+    """主函数"""
+    program_start_time = time.time()
+    
+    print("=" * 60)
+    print("FIT文件时间戳/距离透明视频生成器")
+    print("=" * 60)
+    
+    # 显示当前配置
+    print(f"时区偏移: UTC+{TIMEZONE_OFFSET}")
+    print(f"时间帧率: {FPS_TIME} FPS")
+    print(f"距离帧率: {FPS_DISTANCE} FPS")
+    print()
+    
+    # 获取FIT文件路径
+    fit_path = get_fit_path()
+    if fit_path is None:
+        return
+    
+    # 获取所有lap信息
+    laps = get_all_laps(fit_path)
+    if not laps:
+        print("文件中没有Lap信息，无法生成视频")
+        return
+    
+    # 让用户选择要生成的lap
+    selection = select_laps_for_generation(laps)
+    if selection is None:
+        print("用户取消操作")
+        return
+    
+    lap_start, lap_end, selected_laps = selection
+    
+    # 让用户选择生成哪种视频
+    generate_time, generate_distance = get_video_selection()
+    if generate_time is None or generate_distance is None:
+        print("用户取消操作")
+        return
+    
+    if not generate_time and not generate_distance:
+        print("未选择任何视频类型，退出")
+        return
+    
+    # 加载字体
+    print("\n加载字体...")
+    time_font = load_font(TIME_FONT_SIZE)
+    dist_font = load_font(DIST_FONT_SIZE)
+    
+    # 计算视频尺寸
+    print("计算视频尺寸...")
+    width, height = calculate_video_dimensions(time_font, dist_font)
+    
+    # 加载距离数据（如果需要生成距离视频）
+    interp_times, interp_distances = None, None
+    if generate_distance:
+        times, distances = load_fit_data(fit_path, lap_start, lap_end)
+        if times is None or distances is None:
+            print("❌ 无法加载距离数据，跳过距离视频生成")
+            generate_distance = False
+        else:
+            # 插值距离数据
+            interp_times, interp_distances = interpolate_distance(
+                times, distances, lap_start, lap_end, FPS_DISTANCE
+            )
+            if interp_times is None:
+                print("❌ 距离数据插值失败，跳过距离视频生成")
+                generate_distance = False
+    
+    # 生成帧
+    time_frame_count = 0
+    distance_frame_count = 0
+    
+    # 使用多线程并行生成
+    threads = []
+    results = {}
+    
+    def generate_time_thread():
+        try:
+            frames = generate_time_frames(lap_start, lap_end, width, height, time_font)
+            results['time_frames'] = frames
+            results['time_success'] = True
+        except Exception as e:
+            print(f"[时间帧生成错误] {e}")
+            traceback.print_exc()
+            results['time_success'] = False
+    
+    def generate_distance_thread():
+        try:
+            frames = generate_distance_frames(interp_times, interp_distances, width, height, dist_font)
+            results['distance_frames'] = frames
+            results['distance_success'] = True
+        except Exception as e:
+            print(f"[距离帧生成错误] {e}")
+            traceback.print_exc()
+            results['distance_success'] = False
+    
+    if generate_time:
+        t1 = threading.Thread(target=generate_time_thread)
+        threads.append(t1)
+        t1.start()
+    
+    if generate_distance:
+        t2 = threading.Thread(target=generate_distance_thread)
+        threads.append(t2)
+        t2.start()
+    
+    # 等待所有线程完成
+    for thread in threads:
+        thread.join()
+    
+    # 获取结果
+    if generate_time:
+        time_frame_count = results.get('time_frames', 0)
+        time_success = results.get('time_success', False)
+    if generate_distance:
+        distance_frame_count = results.get('distance_frames', 0)
+        distance_success = results.get('distance_success', False)
+    
+    # 合成视频
+    time_video_success = False
+    distance_video_success = False
+    
+    if generate_time and time_success and time_frame_count > 0:
+        print("\n" + "="*50)
+        print("合成时间视频...")
+        time_video_success = compile_video(
+            OUTPUT_DIR_TIME, OUTPUT_VIDEO_TIME, 
+            time_frame_count, width, height, FPS_TIME
+        )
+    
+    if generate_distance and distance_success and distance_frame_count > 0:
+        print("\n" + "="*50)
+        print("合成距离视频...")
+        distance_video_success = compile_video(
+            OUTPUT_DIR_DISTANCE, OUTPUT_VIDEO_DISTANCE,
+            distance_frame_count, width, height, FPS_DISTANCE
+        )
+    
+    # 显示生成结果
+    print("\n" + "="*60)
+    print("生成结果汇总:")
+    print("="*60)
+    
+    if generate_time:
+        status = "✅ 成功" if time_video_success else "❌ 失败"
+        print(f"时间视频: {status}")
+        if time_video_success:
+            print(f"  文件: {os.path.abspath(OUTPUT_VIDEO_TIME)}")
+            print(f"  帧数: {time_frame_count}")
+            print(f"  帧率: {FPS_TIME}")
+    
+    if generate_distance:
+        status = "✅ 成功" if distance_video_success else "❌ 失败"
+        print(f"距离视频: {status}")
+        if distance_video_success:
+            print(f"  文件: {os.path.abspath(OUTPUT_VIDEO_DISTANCE)}")
+            print(f"  帧数: {distance_frame_count}")
+            print(f"  帧率: {FPS_DISTANCE}")
+    
+    # 清理临时文件
+    cleanup()
+    
+    # 计算总运行时间
+    program_end_time = time.time()
+    total_seconds = program_end_time - program_start_time
+    minutes = int(total_seconds // 60)
+    seconds = total_seconds % 60
+    
+    print(f"\n总运行时间: {minutes}分{seconds:.2f}秒")
+    print("\n程序结束")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n程序被用户中断")
+        cleanup()
+    except Exception as e:
+        print(f"\n❌ 程序发生错误: {e}")
+        traceback.print_exc()
+        cleanup()
