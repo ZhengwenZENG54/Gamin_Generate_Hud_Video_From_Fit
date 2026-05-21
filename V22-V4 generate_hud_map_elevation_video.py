@@ -233,15 +233,36 @@ def write_audit_log(audit_info):
             if audit_info['selected_laps']:
                 f.write(f"选择的Lap: {', '.join(map(str, audit_info['selected_lap_indices']))}\n")
                 f.write(f"选择的Lap详细信息:\n")
-                for lap in audit_info['selected_laps']:
+                
+                # 对选中的Lap按开始时间排序
+                sorted_laps = sorted(audit_info['selected_laps'], key=lambda x: x['start_time'])
+                
+                for lap in sorted_laps:
                     lap_seconds = lap.get('elapsed_seconds', 0)
                     hms = seconds_to_hms(lap_seconds)
                     f.write(f"  Lap {lap.get('index', 'N/A')}: {hms} ({lap_seconds:.1f}秒)\n")
                 
-                # 总时长
-                total_seconds = sum(lap.get('elapsed_seconds', 0) for lap in audit_info['selected_laps'])
-                total_hms = seconds_to_hms(total_seconds)
-                f.write(f"总时长: {total_hms} ({total_seconds:.1f}秒)\n")
+                # 计算连续视频的总时长
+                if len(sorted_laps) > 0:
+                    # 获取最早的开始时间和最晚的结束时间
+                    first_start = min(lap['start_time'] for lap in sorted_laps)
+                    last_end = max(lap['end_time'] for lap in sorted_laps)
+                    continuous_duration = (last_end - first_start).total_seconds()
+                    
+                    # 计算选择的Lap总时长（简单相加）
+                    selected_laps_total = sum(lap.get('elapsed_seconds', 0) for lap in sorted_laps)
+                    
+                    # 计算中间间隔的时长
+                    gap_duration = continuous_duration - selected_laps_total
+                    
+                    continuous_hms = seconds_to_hms(continuous_duration)
+                    selected_hms = seconds_to_hms(selected_laps_total)
+                    gap_hms = seconds_to_hms(gap_duration)
+                    
+                    f.write(f"连续视频时间范围: {first_start} 到 {last_end}\n")
+                    f.write(f"连续视频总时长: {continuous_hms} ({continuous_duration:.1f}秒)\n")
+                    f.write(f"选中Lap总时长: {selected_hms} ({selected_laps_total:.1f}秒)\n")
+                    f.write(f"中间间隔时长: {gap_hms} ({gap_duration:.1f}秒)\n")
             else:
                 f.write("选择的Lap: 无\n")
             
