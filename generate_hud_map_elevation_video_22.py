@@ -18,7 +18,10 @@ from matplotlib.patches import Circle
 def generate_hud_map_elevation_video(fit_path, lap_start, lap_end, 
                                generate_hud=True,
                                generate_map=True,
-                               generate_elevation=True):
+                               generate_elevation=True,
+                               hud_fps=30,  # 新增：HUD视频的FPS
+                               map_fps=5,  # 新增：地图视频的FPS
+                               elevation_fps=5):  # 新增：海拔视频的FPS
     """
     从FIT文件生成HUD、地图和海拔叠加视频
     
@@ -36,6 +39,12 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         是否生成地图视频
     generate_elevation : bool, 默认True
         是否生成海拔视频
+    hud_fps : int, 默认5
+        HUD视频的帧率
+    map_fps : int, 5
+        地图视频的帧率
+    elevation_fps : int, 默认5
+        海拔视频的帧率
         
     返回值:
     ----------
@@ -49,8 +58,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     output_dir_map = "frames_map"
     output_dir_elevation = "frames_elevation"
     
-    # 视频参数
-    fps = 30
+    # 视频参数 - 分别设置FPS
     width, height = 480, 270
     font_size = 25
     print_interval = 10
@@ -92,7 +100,9 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     OUTPUT_DIR_HUD = output_dir_hud
     OUTPUT_DIR_MAP = output_dir_map
     OUTPUT_DIR_ELEVATION = output_dir_elevation
-    FPS = fps
+    HUD_FPS = hud_fps
+    MAP_FPS = map_fps
+    ELEVATION_FPS = elevation_fps
     WIDTH, HEIGHT = width, height
     ELEVATION_WIDTH = 800  # 指定宽度
     ELEVATION_HEIGHT = int(ELEVATION_WIDTH / elevation_aspect_ratio)  # 根据宽度和长宽比计算高度
@@ -112,16 +122,17 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         print(f"HUD输出目录: {OUTPUT_DIR_HUD}" if generate_hud else "[跳过HUD生成]")
         print(f"地图输出目录: {OUTPUT_DIR_MAP}" if generate_map else "[跳过地图生成]")
         print(f"海拔输出目录: {OUTPUT_DIR_ELEVATION}" if generate_elevation else "[跳过海拔生成]")
-        print(f"HUD输出视频: {OUTPUT_MOV_HUD}" if generate_hud else "")
-        print(f"地图输出视频: {OUTPUT_MOV_MAP}" if generate_map else "")
-        print(f"海拔输出视频: {OUTPUT_MOV_ELEVATION}" if generate_elevation else "")
-        print(f"帧率(FPS): {FPS}")
+        print(f"HUD输出视频: {OUTPUT_MOV_HUD} (FPS: {HUD_FPS})" if generate_hud else "")
+        print(f"地图输出视频: {OUTPUT_MOV_MAP} (FPS: {MAP_FPS})" if generate_map else "")
+        print(f"海拔输出视频: {OUTPUT_MOV_ELEVATION} (FPS: {ELEVATION_FPS})" if generate_elevation else "")
         print(f"HUD/地图分辨率: {WIDTH}x{HEIGHT}")
         print(f"海拔分辨率: {ELEVATION_WIDTH}x{ELEVATION_HEIGHT} (长宽比 {elevation_aspect_ratio}:1)")
         print(f"开始时间: {lap_start} (UTC)")
         print(f"结束时间: {lap_end} (UTC)")
         print(f"计算时长: {duration}秒 ({duration//60}分{duration%60}秒)")
-        print(f"预期总帧数: {int(duration*FPS)}帧")
+        print(f"HUD预期总帧数: {int(duration*HUD_FPS)}帧" if generate_hud else "")
+        print(f"地图预期总帧数: {int(duration*MAP_FPS)}帧" if generate_map else "")
+        print(f"海拔预期总帧数: {int(duration*ELEVATION_FPS)}帧" if generate_elevation else "")
         print(f"速度显示阈值: {SPEED_THRESHOLD} km/h")
         print(f"多线程渲染: {'启用' if use_multithreading else '禁用'}")
         print(f"地图标记类型: {map_marker_type}")
@@ -232,10 +243,10 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             'alts':    np.array(alts),
         }
     
-    def interpolate(data, duration_sec):
-        print(f"\n[DEBUG] 开始数据插值，目标时长: {duration_sec}秒")
+    def interpolate(data, duration_sec, fps):
+        print(f"\n[DEBUG] 开始数据插值，目标时长: {duration_sec}秒, 目标FPS: {fps}")
         x = data['offsets']
-        time_points = np.linspace(0, duration_sec, int(duration_sec * FPS) + 1)
+        time_points = np.linspace(0, duration_sec, int(duration_sec * fps) + 1)
         print(f"[DEBUG] 生成{len(time_points)}个时间点")
         
         is_stopped_original = data['speed'] < SPEED_THRESHOLD
@@ -302,6 +313,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             'lats':  interp_lats,
             'lons':  interp_lons,
             'alts':  interp_alts,
+            'time_points': time_points,  # 返回时间点
         }
         
         zero_count = np.sum(result['speed'] < 0.1)
@@ -495,13 +507,13 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             return f"{value} bpm"
         return str(value)
     
-    def render_hud_frames(data_intp, duration_sec):
+    def render_hud_frames(data_intp_hud, duration_sec):
         if not generate_hud:
             return 0
             
-        print("\n[DEBUG] 开始渲染HUD帧")
+        print(f"\n[DEBUG] 开始渲染HUD帧 (FPS: {HUD_FPS})")
         os.makedirs(OUTPUT_DIR_HUD, exist_ok=True)
-        frame_count = int(duration_sec * FPS)
+        hud_frame_count = len(data_intp_hud['speed'])  # 使用插值后的数据长度
 
         # 清理旧帧
         for f in os.listdir(OUTPUT_DIR_HUD):
@@ -528,9 +540,9 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         last_print_time = time.time()
         start_time = time.time()
         
-        hud_frame_count = 0
+        hud_frames_rendered = 0
 
-        for idx in range(frame_count):
+        for idx in range(hud_frame_count):
             current_time = time.time()
             if current_time - last_print_time >= PRINT_INTERVAL:
                 elapsed = current_time - start_time
@@ -539,19 +551,19 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                     fps_actual = processed / elapsed
                 else:
                     fps_actual = 0
-                remaining = (frame_count - processed) / fps_actual if fps_actual > 0 else 0
+                remaining = (hud_frame_count - processed) / fps_actual if fps_actual > 0 else 0
                 print(
-                    f"[HUD进度] {processed}/{frame_count}帧 | "
+                    f"[HUD进度] {processed}/{hud_frame_count}帧 | "
                     f"已用: {elapsed:.1f}s | "
                     f"剩余: {remaining:.1f}s | "
                     f"速度: {fps_actual:.1f}帧/s"
                 )
                 last_print_time = current_time
 
-            speed_display = format_value(data_intp['speed'][idx], 'speed')
-            power_display = format_value(data_intp['power'][idx], 'power')
-            hr_display = format_value(data_intp['hr'][idx], 'hr')
-            cad_display = format_value(data_intp['cad'][idx], 'cad')
+            speed_display = format_value(data_intp_hud['speed'][idx], 'speed')
+            power_display = format_value(data_intp_hud['power'][idx], 'power')
+            hr_display = format_value(data_intp_hud['hr'][idx], 'hr')
+            cad_display = format_value(data_intp_hud['cad'][idx], 'cad')
 
             text_obj.set_text(
                 f"Speed: {speed_display}\n"
@@ -563,11 +575,11 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             path = os.path.join(OUTPUT_DIR_HUD, f"frame_{idx:06d}.png")
             # 关键修改：去掉 bbox_inches='tight'，使用原始代码的保存方式
             fig.savefig(path, dpi=100, pad_inches=0, transparent=True)
-            hud_frame_count += 1
+            hud_frames_rendered += 1
 
         plt.close(fig)
-        validate_frames(frame_count, OUTPUT_DIR_HUD, "frame_")
-        return hud_frame_count
+        validate_frames(hud_frame_count, OUTPUT_DIR_HUD, "frame_")
+        return hud_frames_rendered
     
     def calculate_moving_direction(pixel_x, pixel_y, idx, look_ahead=5):
         """优化版：计算移动方向，使用数组切片提高效率"""
@@ -632,7 +644,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             # 如果半径为0，则使用边界框
             min_x, max_x = np.min(points[:, 0]), np.max(points[:, 0])
             min_y, max_y = np.min(points[:, 1]), np.max(points[:, 1])
-            center_x = (min_x + max_x) / 2
+            center_x = (min_x + max_xritis) / 2
             center_y = (min_y + max_y) / 2
             radius = max(max_x - min_x, max_y - min_y) / 2
         
@@ -729,13 +741,13 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         
         return target_center_x, target_center_y, radius_with_padding, scale_factor, (transformed_x, transformed_y)
     
-    def render_map_frames(data_intp, pixel_x, pixel_y, duration_sec):
+    def render_map_frames(data_intp_map, pixel_x_map, pixel_y_map, duration_sec):
         if not generate_map:
             return 0
             
-        print("\n[DEBUG] 开始渲染地图帧（带完美圆形背景）")
+        print(f"\n[DEBUG] 开始渲染地图帧（带完美圆形背景）(FPS: {MAP_FPS})")
         os.makedirs(OUTPUT_DIR_MAP, exist_ok=True)
-        frame_count = int(duration_sec * FPS)
+        map_frame_count = len(data_intp_map['lats'])  # 使用插值后的数据长度
 
         # 清理旧帧
         for f in os.listdir(OUTPUT_DIR_MAP):
@@ -745,7 +757,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         # 1. 计算完美圆形背景和变换后的轨迹点
         print("[地图计算] 计算完美圆形背景...")
         circle_center_x, circle_center_y, circle_radius, scale_factor, transformed_points = create_perfect_circular_background(
-            pixel_x, pixel_y, WIDTH, HEIGHT, map_circle_padding_percent
+            pixel_x_map, pixel_y_map, WIDTH, HEIGHT, map_circle_padding_percent
         )
         
         if circle_center_x is None:
@@ -813,7 +825,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         
         last_print_time = time.time()
         start_time = time.time()
-        map_frame_count = 0
+        map_frames_rendered = 0
         
         # 存储上一帧的角度，用于平滑旋转
         angle_history = []
@@ -822,7 +834,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         completed_x_list = []
         completed_y_list = []
 
-        for idx in range(frame_count):
+        for idx in range(map_frame_count):
             current_time = time.time()
             if current_time - last_print_time >= PRINT_INTERVAL:
                 elapsed = current_time - start_time
@@ -831,9 +843,9 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                     fps_actual = processed / elapsed
                 else:
                     fps_actual = 0
-                remaining = (frame_count - processed) / fps_actual if fps_actual > 0 else 0
+                remaining = (map_frame_count - processed) / fps_actual if fps_actual > 0 else 0
                 print(
-                    f"[地图进度] {processed}/{frame_count}帧 | "
+                    f"[地图进度] {processed}/{map_frame_count}帧 | "
                     f"已用: {elapsed:.1f}s | "
                     f"剩余: {remaining:.1f}s | "
                     f"速度: {fps_actual:.1f}帧/s"
@@ -901,19 +913,19 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             path = os.path.join(OUTPUT_DIR_MAP, f"frame_map_{idx:06d}.png")
             # 关键修改：使用pad_inches=0去除白边
             fig.savefig(path, dpi=100, pad_inches=0, transparent=True)
-            map_frame_count += 1
+            map_frames_rendered += 1
 
         plt.close(fig)
-        validate_frames(frame_count, OUTPUT_DIR_MAP, "frame_map_")
-        return map_frame_count
+        validate_frames(map_frame_count, OUTPUT_DIR_MAP, "frame_map_")
+        return map_frames_rendered
     
-    def render_elevation_frames(data_intp, pixel_x, pixel_y, duration_sec):
+    def render_elevation_frames(data_intp_elevation, pixel_x_elev, pixel_y_elev, duration_sec):
         if not generate_elevation:
             return 0
             
-        print("\n[DEBUG] 开始渲染海拔帧")
+        print(f"\n[DEBUG] 开始渲染海拔帧 (FPS: {ELEVATION_FPS})")
         os.makedirs(OUTPUT_DIR_ELEVATION, exist_ok=True)
-        frame_count = int(duration_sec * FPS)
+        elevation_frame_count = len(data_intp_elevation['alts'])  # 使用插值后的数据长度
 
         # 清理旧帧
         for f in os.listdir(OUTPUT_DIR_ELEVATION):
@@ -943,7 +955,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             
             # Y轴网格（海拔）
             # 需要先获取海拔范围来计算实际网格
-            valid_pixel_y = [y for y in pixel_y if not np.isnan(y)]
+            valid_pixel_y = [y for y in pixel_y_elev if not np.isnan(y)]
             if valid_pixel_y:
                 min_y = min(valid_pixel_y)
                 max_y = max(valid_pixel_y)
@@ -959,7 +971,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                             ax.axhline(y, color=elevation_grid_color, linewidth=0.5, alpha=0.5)
         
         # 绘制完整海拔曲线（浅色背景）
-        valid_coords = [(x, y) for x, y in zip(pixel_x, pixel_y) if not (np.isnan(x) or np.isnan(y))]
+        valid_coords = [(x, y) for x, y in zip(pixel_x_elev, pixel_y_elev) if not (np.isnan(x) or np.isnan(y))]
         if valid_coords:
             full_x, full_y = zip(*valid_coords)
             ax.plot(full_x, full_y, color=elevation_background_color, 
@@ -975,13 +987,13 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         
         last_print_time = time.time()
         start_time = time.time()
-        elevation_frame_count = 0
+        elevation_frames_rendered = 0
         
         # 存储已完成轨迹的点
         completed_x_list = []
         completed_y_list = []
 
-        for idx in range(frame_count):
+        for idx in range(elevation_frame_count):
             current_time = time.time()
             if current_time - last_print_time >= PRINT_INTERVAL:
                 elapsed = current_time - start_time
@@ -990,9 +1002,9 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                     fps_actual = processed / elapsed
                 else:
                     fps_actual = 0
-                remaining = (frame_count - processed) / fps_actual if fps_actual > 0 else 0
+                remaining = (elevation_frame_count - processed) / fps_actual if fps_actual > 0 else 0
                 print(
-                    f"[海拔进度] {processed}/{frame_count}帧 | "
+                    f"[海拔进度] {processed}/{elevation_frame_count}帧 | "
                     f"已用: {elapsed:.1f}s | "
                     f"剩余: {remaining:.1f}s | "
                     f"速度: {fps_actual:.1f}帧/s"
@@ -1000,7 +1012,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                 last_print_time = current_time
             
             # 获取当前坐标
-            current_x, current_y = pixel_x[idx], pixel_y[idx]
+            current_x, current_y = pixel_x_elev[idx], pixel_y_elev[idx]
             
             if not (np.isnan(current_x) or np.isnan(current_y)):
                 # 增量更新轨迹
@@ -1014,22 +1026,22 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             # 保存帧
             path = os.path.join(OUTPUT_DIR_ELEVATION, f"frame_elevation_{idx:06d}.png")
             fig.savefig(path, dpi=100, pad_inches=0, transparent=True)
-            elevation_frame_count += 1
+            elevation_frames_rendered += 1
 
         plt.close(fig)
-        validate_frames(frame_count, OUTPUT_DIR_ELEVATION, "frame_elevation_")
-        return elevation_frame_count
+        validate_frames(elevation_frame_count, OUTPUT_DIR_ELEVATION, "frame_elevation_")
+        return elevation_frames_rendered
     
-    def assemble_alpha_mov(frame_dir, output_file, frame_count, prefix="frame_", width=None, height=None):
+    def assemble_alpha_mov(frame_dir, output_file, frame_count, fps, prefix="frame_", width=None, height=None):
         if not os.path.exists(frame_dir):
             print(f"[错误] 帧目录不存在: {frame_dir}")
             return False
             
-        print(f"\n[DEBUG] 合成视频: {output_file}")
+        print(f"\n[DEBUG] 合成视频: {output_file} (FPS: {fps})")
         target_width = width or WIDTH
         target_height = height or HEIGHT
         cmd = (
-            f'ffmpeg -y -framerate {FPS} -start_number 0 -i "{frame_dir}/{prefix}%06d.png" '
+            f'ffmpeg -y -framerate {fps} -start_number 0 -i "{frame_dir}/{prefix}%06d.png" '
             f'-vf "scale={target_width}:{target_height},setsar=1" '
             f'-c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le '
             f'-frames:v {frame_count} "{output_file}"'
@@ -1050,40 +1062,58 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     
     try:
         # 1. 加载数据
-        print("\n[步骤1/5] 加载FIT数据...")
+        print("\n[步骤1/6] 加载FIT数据...")
         raw = load_and_filter(fit_path, lap_start, lap_end)
         
-        # 2. 插值数据
-        print("\n[步骤2/5] 插值数据...")
-        data_intp = interpolate(raw, duration)
+        # 2. 分别用不同的FPS插值数据
+        print("\n[步骤2/6] 插值数据...")
+        data_intp_hud = None
+        data_intp_map = None
+        data_intp_elevation = None
         
-        # 3. 处理GPS坐标
-        print("\n[步骤3/5] 处理GPS坐标...")
-        pixel_x_map, pixel_y_map, min_lat, max_lat, min_lon, max_lon = normalize_coordinates(
-            data_intp['lats'], data_intp['lons']
-        )
+        if generate_hud:
+            data_intp_hud = interpolate(raw, duration, HUD_FPS)
+            print(f"[HUD插值] 生成了{len(data_intp_hud['speed'])}帧 (FPS: {HUD_FPS})")
         
-        if pixel_x_map is None:
-            print("[警告] 没有有效的GPS数据，将跳过地图视频生成")
-            generate_map = False
+        if generate_map:
+            data_intp_map = interpolate(raw, duration, MAP_FPS)
+            print(f"[地图插值] 生成了{len(data_intp_map['speed'])}帧 (FPS: {MAP_FPS})")
+        
+        if generate_elevation:
+            data_intp_elevation = interpolate(raw, duration, ELEVATION_FPS)
+            print(f"[海拔插值] 生成了{len(data_intp_elevation['speed'])}帧 (FPS: {ELEVATION_FPS})")
+        
+        # 3. 处理GPS坐标（地图）
+        if generate_map and data_intp_map is not None:
+            print("\n[步骤3/6] 处理GPS坐标（地图）...")
+            pixel_x_map, pixel_y_map, min_lat, max_lat, min_lon, max_lon = normalize_coordinates(
+                data_intp_map['lats'], data_intp_map['lons']
+            )
+            
+            if pixel_x_map is None:
+                print("[警告] 没有有效的GPS数据，将跳过地图视频生成")
+                generate_map = False
+        else:
+            pixel_x_map = pixel_y_map = None
         
         # 4. 处理海拔坐标
-        print("\n[步骤4/5] 处理海拔坐标...")
-        time_points = np.linspace(0, duration, int(duration * FPS) + 1)
-        pixel_x_elev, pixel_y_elev, min_alt, max_alt, min_time, max_time = normalize_elevation(
-            data_intp['alts'], time_points
-        )
-        
-        if pixel_x_elev is None:
-            print("[警告] 没有有效的海拔数据，将跳过海拔视频生成")
-            generate_elevation = False
+        if generate_elevation and data_intp_elevation is not None:
+            print("\n[步骤4/6] 处理海拔坐标...")
+            pixel_x_elev, pixel_y_elev, min_alt, max_alt, min_time, max_time = normalize_elevation(
+                data_intp_elevation['alts'], data_intp_elevation['time_points']
+            )
+            
+            if pixel_x_elev is None:
+                print("[警告] 没有有效的海拔数据，将跳过海拔视频生成")
+                generate_elevation = False
+            else:
+                print(f"[海拔范围] {min_alt:.1f}米 到 {max_alt:.1f}米 (跨度: {max_alt-min_alt:.1f}米)")
+                print(f"[时间范围] {min_time:.1f}秒 到 {max_time:.1f}秒 (时长: {max_time-min_time:.1f}秒)")
         else:
-            print(f"[海拔范围] {min_alt:.1f}米 到 {max_alt:.1f}米 (跨度: {max_alt-min_alt:.1f}米)")
-            print(f"[时间范围] {min_time:.1f}秒 到 {max_time:.1f}秒 (时长: {max_time-min_time:.1f}秒)")
+            pixel_x_elev = pixel_y_elev = None
         
         # 5. 渲染帧
-        print("\n[步骤5/5] 渲染帧...")
-        frame_count = int(duration * FPS)
+        print("\n[步骤5/6] 渲染帧...")
         
         hud_frames_done = 0
         map_frames_done = 0
@@ -1104,7 +1134,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             
             def render_hud_thread():
                 try:
-                    frames = render_hud_frames(data_intp, duration)
+                    frames = render_hud_frames(data_intp_hud, duration)
                     results['hud']['frames'] = frames
                     results['hud']['success'] = True
                 except Exception as e:
@@ -1114,7 +1144,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             
             def render_map_thread():
                 try:
-                    frames = render_map_frames(data_intp, pixel_x_map, pixel_y_map, duration)
+                    frames = render_map_frames(data_intp_map, pixel_x_map, pixel_y_map, duration)
                     results['map']['frames'] = frames
                     results['map']['success'] = True
                 except Exception as e:
@@ -1124,7 +1154,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             
             def render_elevation_thread():
                 try:
-                    frames = render_elevation_frames(data_intp, pixel_x_elev, pixel_y_elev, duration)
+                    frames = render_elevation_frames(data_intp_elevation, pixel_x_elev, pixel_y_elev, duration)
                     results['elevation']['frames'] = frames
                     results['elevation']['success'] = True
                 except Exception as e:
@@ -1133,17 +1163,17 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                     traceback.print_exc()
             
             # 启动渲染线程
-            if generate_hud:
+            if generate_hud and data_intp_hud is not None:
                 hud_thread = threading.Thread(target=render_hud_thread)
                 threads.append(hud_thread)
                 hud_thread.start()
             
-            if generate_map and pixel_x_map is not None:
+            if generate_map and data_intp_map is not None and pixel_x_map is not None:
                 map_thread = threading.Thread(target=render_map_thread)
                 threads.append(map_thread)
                 map_thread.start()
             
-            if generate_elevation and pixel_x_elev is not None:
+            if generate_elevation and data_intp_elevation is not None and pixel_x_elev is not None:
                 elevation_thread = threading.Thread(target=render_elevation_thread)
                 threads.append(elevation_thread)
                 elevation_thread.start()
@@ -1162,9 +1192,9 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         else:
             # 顺序渲染
             print("[DEBUG] 使用顺序渲染...")
-            if generate_hud:
+            if generate_hud and data_intp_hud is not None:
                 try:
-                    hud_frames_done = render_hud_frames(data_intp, duration)
+                    hud_frames_done = render_hud_frames(data_intp_hud, duration)
                     hud_success = True
                 except Exception as e:
                     print(f"[HUD渲染错误] {e}")
@@ -1172,9 +1202,9 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                     traceback.print_exc()
                     hud_success = False
             
-            if generate_map and pixel_x_map is not None:
+            if generate_map and data_intp_map is not None and pixel_x_map is not None:
                 try:
-                    map_frames_done = render_map_frames(data_intp, pixel_x_map, pixel_y_map, duration)
+                    map_frames_done = render_map_frames(data_intp_map, pixel_x_map, pixel_y_map, duration)
                     map_success = True
                 except Exception as e:
                     print(f"[地图渲染错误] {e}")
@@ -1182,9 +1212,9 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                     traceback.print_exc()
                     map_success = False
             
-            if generate_elevation and pixel_x_elev is not None:
+            if generate_elevation and data_intp_elevation is not None and pixel_x_elev is not None:
                 try:
-                    elevation_frames_done = render_elevation_frames(data_intp, pixel_x_elev, pixel_y_elev, duration)
+                    elevation_frames_done = render_elevation_frames(data_intp_elevation, pixel_x_elev, pixel_y_elev, duration)
                     elevation_success = True
                 except Exception as e:
                     print(f"[海拔渲染错误] {e}")
@@ -1196,8 +1226,8 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         print("\n[步骤6/6] 合成视频...")
         if generate_hud and hud_success and hud_frames_done > 0:
             print("\n--- 合成HUD视频 ---")
-            if assemble_alpha_mov(OUTPUT_DIR_HUD, OUTPUT_MOV_HUD, hud_frames_done, "frame_"):
-                print(f"✅ HUD视频生成成功: {OUTPUT_MOV_HUD}")
+            if assemble_alpha_mov(OUTPUT_DIR_HUD, OUTPUT_MOV_HUD, hud_frames_done, HUD_FPS, "frame_"):
+                print(f"✅ HUD视频生成成功: {OUTPUT_MOV_HUD} (FPS: {HUD_FPS})")
             else:
                 print("❌ HUD视频生成失败")
         else:
@@ -1205,8 +1235,8 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         
         if generate_map and map_success and map_frames_done > 0:
             print("\n--- 合成地图视频 ---")
-            if assemble_alpha_mov(OUTPUT_DIR_MAP, OUTPUT_MOV_MAP, map_frames_done, "frame_map_"):
-                print(f"✅ 地图视频生成成功: {OUTPUT_MOV_MAP}")
+            if assemble_alpha_mov(OUTPUT_DIR_MAP, OUTPUT_MOV_MAP, map_frames_done, MAP_FPS, "frame_map_"):
+                print(f"✅ 地图视频生成成功: {OUTPUT_MOV_MAP} (FPS: {MAP_FPS})")
             else:
                 print("❌ 地图视频生成失败")
         else:
@@ -1215,9 +1245,9 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         if generate_elevation and elevation_success and elevation_frames_done > 0:
             print("\n--- 合成海拔视频 ---")
             if assemble_alpha_mov(OUTPUT_DIR_ELEVATION, OUTPUT_MOV_ELEVATION, 
-                                 elevation_frames_done, "frame_elevation_", 
+                                 elevation_frames_done, ELEVATION_FPS, "frame_elevation_", 
                                  ELEVATION_WIDTH, ELEVATION_HEIGHT):
-                print(f"✅ 海拔视频生成成功: {OUTPUT_MOV_ELEVATION}")
+                print(f"✅ 海拔视频生成成功: {OUTPUT_MOV_ELEVATION} (FPS: {ELEVATION_FPS})")
             else:
                 print("❌ 海拔视频生成失败")
         else:
@@ -1267,14 +1297,17 @@ if __name__ == "__main__":
     lap_start = datetime(2026, 4, 25, 2, 7, 30)
     lap_end   = datetime(2026, 4, 25, 2, 15, 52)
     
-    # 调用函数，生成所有三种视频
+    # 调用函数，生成所有三种视频，可以分别设置不同的FPS
     result = generate_hud_map_elevation_video(
         fit_path=FIT_PATH,
         lap_start=lap_start,
         lap_end=lap_end,
-        generate_hud=False,         # 是否生成HUD视频
-        generate_map=False,         # 是否生成地图视频
-        generate_elevation=False    # 是否生成海拔视频
+        generate_hud=True,         # 是否生成HUD视频
+        generate_map=True,         # 是否生成地图视频
+        generate_elevation=True,    # 是否生成海拔视频
+        hud_fps=5,                 # HUD视频帧率
+        map_fps=2,                 # 地图视频帧率
+        elevation_fps=10           # 海拔视频帧率
     )
     
     print("\n" + "="*50)
