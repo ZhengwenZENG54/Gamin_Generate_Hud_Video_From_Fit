@@ -644,7 +644,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             # 如果半径为0，则使用边界框
             min_x, max_x = np.min(points[:, 0]), np.max(points[:, 0])
             min_y, max_y = np.min(points[:, 1]), np.max(points[:, 1])
-            center_x = (min_x + max_xritis) / 2
+            center_x = (min_x + max_x) / 2
             center_y = (min_y + max_y) / 2
             radius = max(max_x - min_x, max_y - min_y) / 2
         
