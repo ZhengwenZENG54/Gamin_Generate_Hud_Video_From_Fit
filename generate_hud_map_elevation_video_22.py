@@ -417,7 +417,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         
         return pixel_x, pixel_y, min_lat, max_lat, min_lon, max_lon
     
-    def normalize_elevation(alts, time_points, margin=elevation_margin):
+    def normalize_elevation(alts, time_points, margin=elevation_margin, time_margin_factor=0.05):
         """
         将海拔数据归一化到像素坐标
         
@@ -428,8 +428,10 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         time_points : array
             时间点数组
         margin : float
-            边距比例
-            
+            垂直边距比例
+        time_margin_factor : float
+            水平（时间）边距比例
+                
         返回值:
         ----------
         pixel_x, pixel_y, min_alt, max_alt, min_time, max_time
@@ -453,14 +455,20 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         min_alt -= alt_margin
         max_alt += alt_margin
         
-        # 时间范围
-        min_time, max_time = np.min(time_points), np.max(time_points)
-        
+        # 时间范围 - 添加边距
+        min_time, max_time = np.min(valid_times), np.max(valid_times)
+        time_range = max_time - min_time
+        if time_range == 0:
+            time_range = 0.0001
+        time_margin = time_range * time_margin_factor  # 使用新的时间边距参数
+        min_time -= time_margin
+        max_time += time_margin
+    
         # 归一化函数
         def normalize(alt, time):
             if np.isnan(alt):
                 return np.nan, np.nan
-            # X轴：时间归一化到0-1
+            # X轴：时间归一化到0-1，添加了边距
             norm_x = (time - min_time) / (max_time - min_time)
             # 修改点3：修正海拔上下翻转，移除1.0 -
             norm_y = (alt - min_alt) / (max_alt - min_alt)  # 修改：去掉1.0 -
@@ -1099,8 +1107,12 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         # 4. 处理海拔坐标
         if generate_elevation and data_intp_elevation is not None:
             print("\n[步骤4/6] 处理海拔坐标...")
+            # 修改这里，添加 time_margin_factor 参数
             pixel_x_elev, pixel_y_elev, min_alt, max_alt, min_time, max_time = normalize_elevation(
-                data_intp_elevation['alts'], data_intp_elevation['time_points']
+                data_intp_elevation['alts'], 
+                data_intp_elevation['time_points'],
+                margin=elevation_margin,
+                time_margin_factor=0.05  # 新增：时间边距，5%
             )
             
             if pixel_x_elev is None:
