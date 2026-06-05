@@ -505,7 +505,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                 return f"<{SPEED_THRESHOLD}km/h"
             return f"{value:.1f} km/h"
         elif value_type in ['power', 'cad']:
-            if value == -2147483648:
+            if value < 0: 
                 return "--"
             if value_type == 'power':
                 return f"{value} W"
