@@ -111,9 +111,9 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     SPEED_THRESHOLD = speed_threshold
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    OUTPUT_MOV_HUD = f"alpha_hud_overlay_{timestamp}.mov"
-    OUTPUT_MOV_MAP = f"alpha_map_overlay{timestamp}.mov"
-    OUTPUT_MOV_ELEVATION = f"alpha_elevation_overlay{timestamp}.mov"
+    OUTPUT_MOV_HUD = f"alpha_hud__{timestamp}.mov"
+    OUTPUT_MOV_MAP = f"alpha_map__{timestamp}.mov"
+    OUTPUT_MOV_ELEVATION = f"alpha_elev_{timestamp}.mov"
     
     def debug_print_config():
         duration = (lap_end - lap_start).total_seconds()

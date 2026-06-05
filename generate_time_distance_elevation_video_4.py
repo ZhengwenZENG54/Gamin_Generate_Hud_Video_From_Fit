@@ -60,9 +60,9 @@ OUTPUT_DIR_TIME = "frames_timestamp"  # 时间帧目录
 OUTPUT_DIR_DISTANCE = "frames_distance"  # 距离帧目录
 OUTPUT_DIR_ELEVATION = "frames_elevation"  # 海拔帧目录
 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-OUTPUT_VIDEO_TIME = f"beta_timestamp_overlay_{timestamp}.mov"  # 时间视频文件名
-OUTPUT_VIDEO_DISTANCE = f"beta_distance_overlay_{timestamp}.mov"  # 距离视频文件名
-OUTPUT_VIDEO_ELEVATION = f"beta_elevation_overlay_{timestamp}.mov"  # 海拔视频文件名
+OUTPUT_VIDEO_TIME = f"beta_time_{timestamp}.mov"  # 时间视频文件名
+OUTPUT_VIDEO_DISTANCE = f"beta_dist_{timestamp}.mov"  # 距离视频文件名
+OUTPUT_VIDEO_ELEVATION = f"beta_elev_{timestamp}.mov"  # 海拔视频文件名
 
 # 时区设置（北京时间 = UTC+8）
 TIMEZONE_OFFSET = 8  # 小时
