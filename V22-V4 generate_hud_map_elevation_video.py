@@ -15,8 +15,8 @@ FIT_PATH = None
 # FIT_PATH = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-18-18-20-58.fit"
 
 # 原模块路径
-MODULE_PATH_A = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\Gamin_Generate_Hud_Video_From_Fit\generate_hud_map_elevation_video_22.py"
-MODULE_PATH_C = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\Gamin_Generate_Hud_Video_From_Fit\generate_time_distance_elevation_video_4.py" 
+MODULE_PATH_ALPHA = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\Gamin_Generate_Hud_Video_From_Fit\generate_hud_map_elevation_video_22.py"
+MODULE_PATH_BETA = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\Gamin_Generate_Hud_Video_From_Fit\generate_time_distance_elevation_video_4.py" 
 
 # 日志文件路径
 LOG_FILE = r"Gamin_Generate_Hud_Video_From_Fit\fit_video_audit_log.txt"
@@ -31,8 +31,8 @@ HUD_FPS = 30     # HUD视频帧率
 MAP_FPS = 5     # 地图视频帧率
 ELEVATION_FPS = 5  # 海拔视频帧率
 
-# 新增：是否在A运行后自动运行C
-AUTO_RUN_C = True
+# 新增：是否在Alpha运行后自动运行Beta
+AUTO_RUN_BETA = True
 # =====================================================
 
 def load_module_from_path(module_name, file_path):
@@ -268,95 +268,95 @@ def write_audit_log(audit_info):
             
             # 模块alpha生成结果
             f.write("\n=== 模块alpha生成结果 ===\n")
-            video_types_a = []
-            if audit_info.get('generate_hud_a'):
-                video_types_a.append("HUD视频")
-            if audit_info.get('generate_map_a'):
-                video_types_a.append("地图视频")
-            if audit_info.get('generate_elevation_a'):
-                video_types_a.append("海拔视频")
+            video_types_alpha = []
+            if audit_info.get('generate_hud_alpha'):
+                video_types_alpha.append("HUD视频")
+            if audit_info.get('generate_map_alpha'):
+                video_types_alpha.append("地图视频")
+            if audit_info.get('generate_elevation_alpha'):
+                video_types_alpha.append("海拔视频")
             
-            f.write(f"生成视频类型: {' + '.join(video_types_a) if video_types_a else '无'}\n")
+            f.write(f"生成视频类型: {' + '.join(video_types_alpha) if video_types_alpha else '无'}\n")
             
             # 视频帧率设置
             f.write("视频帧率设置:\n")
-            if audit_info.get('generate_hud_a'):
-                f.write(f"  HUD视频: {audit_info.get('hud_fps_a', 'N/A')} FPS\n")
-            if audit_info.get('generate_map_a'):
-                f.write(f"  地图视频: {audit_info.get('map_fps_a', 'N/A')} FPS\n")
-            if audit_info.get('generate_elevation_a'):
-                f.write(f"  海拔视频: {audit_info.get('elevation_fps_a', 'N/A')} FPS\n")
+            if audit_info.get('generate_hud_alpha'):
+                f.write(f"  HUD视频: {audit_info.get('hud_fps_alpha', 'N/A')} FPS\n")
+            if audit_info.get('generate_map_alpha'):
+                f.write(f"  地图视频: {audit_info.get('map_fps_alpha', 'N/A')} FPS\n")
+            if audit_info.get('generate_elevation_alpha'):
+                f.write(f"  海拔视频: {audit_info.get('elevation_fps_alpha', 'N/A')} FPS\n")
             
             # 时间统计
             f.write(f"时间统计:\n")
-            if audit_info.get('hud_time_a') is not None and audit_info.get('generate_hud_a'):
+            if audit_info.get('hud_time_a') is not None and audit_info.get('generate_hud_alpha'):
                 f.write(f"  HUD视频生成时间: {audit_info['hud_time_a']:.2f}秒\n")
-            if audit_info.get('map_time_a') is not None and audit_info.get('generate_map_a'):
+            if audit_info.get('map_time_a') is not None and audit_info.get('generate_map_alpha'):
                 f.write(f"  地图视频生成时间: {audit_info['map_time_a']:.2f}秒\n")
-            if audit_info.get('elevation_time_a') is not None and audit_info.get('generate_elevation_a'):
+            if audit_info.get('elevation_time_a') is not None and audit_info.get('generate_elevation_alpha'):
                 f.write(f"  海拔视频生成时间: {audit_info['elevation_time_a']:.2f}秒\n")
             
-            f.write(f"  模块alpha总耗时: {audit_info.get('total_time_a', 0):.2f}秒\n")
+            f.write(f"  模块alpha总耗时: {audit_info.get('total_time_alpha', 0):.2f}秒\n")
             
             # 生成的帧数
             f.write("生成的帧数:\n")
-            if audit_info.get('hud_frame_count_a') and audit_info.get('generate_hud_a'):
-                f.write(f"  HUD视频: {audit_info['hud_frame_count_a']} 帧\n")
-            if audit_info.get('map_frame_count_a') and audit_info.get('generate_map_a'):
-                f.write(f"  地图视频: {audit_info['map_frame_count_a']} 帧\n")
-            if audit_info.get('elevation_frame_count_a') and audit_info.get('generate_elevation_a'):
-                f.write(f"  海拔视频: {audit_info['elevation_frame_count_a']} 帧\n")
+            if audit_info.get('hud_frame_count_alpha') and audit_info.get('generate_hud_alpha'):
+                f.write(f"  HUD视频: {audit_info['hud_frame_count_alpha']} 帧\n")
+            if audit_info.get('map_frame_count_alpha') and audit_info.get('generate_map_alpha'):
+                f.write(f"  地图视频: {audit_info['map_frame_count_alpha']} 帧\n")
+            if audit_info.get('elevation_frame_count_alpha') and audit_info.get('generate_elevation_alpha'):
+                f.write(f"  海拔视频: {audit_info['elevation_frame_count_alpha']} 帧\n")
             
             # 模块alpha生成的文件路径
             f.write(f"模块alpha生成的文件:\n")
-            for key, value in audit_info.get('result_a', {}).items():
+            for key, value in audit_info.get('result_alpha', {}).items():
                 if isinstance(value, str) and os.path.exists(value):
                     f.write(f"  {key}: {value}\n")
             
             # 模块beta生成结果
             f.write("\n=== 模块beta生成结果 ===\n")
-            video_types_c = []
-            if audit_info.get('generate_time_c'):
-                video_types_c.append("时间视频")
-            if audit_info.get('generate_distance_c'):
-                video_types_c.append("距离视频")
-            if audit_info.get('generate_elevation_c'):
-                video_types_c.append("海拔视频")
+            video_types_beta = []
+            if audit_info.get('generate_time_beta'):
+                video_types_beta.append("时间视频")
+            if audit_info.get('generate_distance_beta'):
+                video_types_beta.append("距离视频")
+            if audit_info.get('generate_elevation_beta'):
+                video_types_beta.append("海拔视频")
             
-            f.write(f"生成视频类型: {' + '.join(video_types_c) if video_types_c else '无'}\n")
+            f.write(f"生成视频类型: {' + '.join(video_types_beta) if video_types_beta else '无'}\n")
             
             # 视频帧率设置
             f.write("视频帧率设置:\n")
-            if audit_info.get('generate_time_c'):
-                f.write(f"  时间视频: {audit_info.get('time_fps_c', 'N/A')} FPS\n")
-            if audit_info.get('generate_distance_c'):
-                f.write(f"  距离视频: {audit_info.get('distance_fps_c', 'N/A')} FPS\n")
-            if audit_info.get('generate_elevation_c'):
-                f.write(f"  海拔视频: {audit_info.get('elevation_fps_c', 'N/A')} FPS\n")
+            if audit_info.get('generate_time_beta'):
+                f.write(f"  时间视频: {audit_info.get('time_fps_beta', 'N/A')} FPS\n")
+            if audit_info.get('generate_distance_beta'):
+                f.write(f"  距离视频: {audit_info.get('distance_fps_beta', 'N/A')} FPS\n")
+            if audit_info.get('generate_elevation_beta'):
+                f.write(f"  海拔视频: {audit_info.get('elevation_fps_beta', 'N/A')} FPS\n")
             
             # 时间统计
             f.write(f"时间统计:\n")
-            if audit_info.get('time_time_c') is not None and audit_info.get('generate_time_c'):
-                f.write(f"  时间视频生成时间: {audit_info['time_time_c']:.2f}秒\n")
-            if audit_info.get('distance_time_c') is not None and audit_info.get('generate_distance_c'):
-                f.write(f"  距离视频生成时间: {audit_info['distance_time_c']:.2f}秒\n")
-            if audit_info.get('elevation_time_c') is not None and audit_info.get('generate_elevation_c'):
-                f.write(f"  海拔视频生成时间: {audit_info['elevation_time_c']:.2f}秒\n")
+            if audit_info.get('time_time_beta') is not None and audit_info.get('generate_time_beta'):
+                f.write(f"  时间视频生成时间: {audit_info['time_time_beta']:.2f}秒\n")
+            if audit_info.get('distance_time_beta') is not None and audit_info.get('generate_distance_beta'):
+                f.write(f"  距离视频生成时间: {audit_info['distance_time_beta']:.2f}秒\n")
+            if audit_info.get('elevation_time_beta') is not None and audit_info.get('generate_elevation_beta'):
+                f.write(f"  海拔视频生成时间: {audit_info['elevation_time_beta']:.2f}秒\n")
             
-            f.write(f"  模块beta总耗时: {audit_info.get('total_time_c', 0):.2f}秒\n")
+            f.write(f"  模块beta总耗时: {audit_info.get('total_time_beta', 0):.2f}秒\n")
             
             # 生成的帧数
             f.write("生成的帧数:\n")
-            if audit_info.get('time_frame_count_c') and audit_info.get('generate_time_c'):
-                f.write(f"  时间视频: {audit_info['time_frame_count_c']} 帧\n")
-            if audit_info.get('distance_frame_count_c') and audit_info.get('generate_distance_c'):
-                f.write(f"  距离视频: {audit_info['distance_frame_count_c']} 帧\n")
-            if audit_info.get('elevation_frame_count_c') and audit_info.get('generate_elevation_c'):
-                f.write(f"  海拔视频: {audit_info['elevation_frame_count_c']} 帧\n")
+            if audit_info.get('time_frame_count_beta') and audit_info.get('generate_time_beta'):
+                f.write(f"  时间视频: {audit_info['time_frame_count_beta']} 帧\n")
+            if audit_info.get('distance_frame_count_beta') and audit_info.get('generate_distance_beta'):
+                f.write(f"  距离视频: {audit_info['distance_frame_count_beta']} 帧\n")
+            if audit_info.get('elevation_frame_count_beta') and audit_info.get('generate_elevation_beta'):
+                f.write(f"  海拔视频: {audit_info['elevation_frame_count_beta']} 帧\n")
             
             # 模块beta生成的文件路径
             f.write(f"模块beta生成的文件:\n")
-            for key, value in audit_info.get('result_c', {}).items():
+            for key, value in audit_info.get('result_beta', {}).items():
                 if isinstance(value, str) and os.path.exists(value):
                     f.write(f"  {key}: {value}\n")
             
@@ -365,14 +365,14 @@ def write_audit_log(audit_info):
             f.write(f"总耗时: {audit_info['total_time']:.2f}秒\n")
             
             # 状态
-            status_a = "成功" if audit_info.get('success_a', True) else "失败"
-            status_c = "成功" if audit_info.get('success_c', True) else "失败"
-            f.write(f"模块alpha状态: {status_a}")
-            if audit_info.get('error_a'):
-                f.write(f" (错误: {audit_info['error_a']})")
-            f.write(f"\n模块beta状态: {status_c}")
-            if audit_info.get('error_c'):
-                f.write(f" (错误: {audit_info['error_c']})")
+            status_alpha = "成功" if audit_info.get('success_alpha', True) else "失败"
+            status_beta = "成功" if audit_info.get('success_beta', True) else "失败"
+            f.write(f"模块alpha状态: {status_alpha}")
+            if audit_info.get('error_alpha'):
+                f.write(f" (错误: {audit_info['error_alpha']})")
+            f.write(f"\n模块beta状态: {status_beta}")
+            if audit_info.get('error_beta'):
+                f.write(f" (错误: {audit_info['error_beta']})")
             
             f.write("\n")
             f.write("-"*80 + "\n\n")
@@ -436,7 +436,7 @@ def get_fps_settings():
         else:
             print("输入无效，请重新输入")
 
-def run_module_a(fit_path, lap_start, lap_end, generate_hud, generate_map, generate_elevation, 
+def run_module_alpha(fit_path, lap_start, lap_end, generate_hud, generate_map, generate_elevation, 
                  hud_fps, map_fps, elevation_fps, audit_info):
     """运行模块alpha并收集结果"""
     print("\n" + "="*60)
@@ -445,13 +445,13 @@ def run_module_a(fit_path, lap_start, lap_end, generate_hud, generate_map, gener
     
     try:
         # 检查模块文件是否存在
-        if not os.path.exists(MODULE_PATH_A):
-            error_msg = f"找不到模块alpha文件: {MODULE_PATH_A}"
+        if not os.path.exists(MODULE_PATH_ALPHA):
+            error_msg = f"找不到模块alpha文件: {MODULE_PATH_ALPHA}"
             print(f"❌ {error_msg}")
             return {'success': False, 'error': error_msg}
         
         # 动态导入模块alpha
-        module_a = load_module_from_path("module_a", MODULE_PATH_A)
+        module_alpha = load_module_from_path("module_alpha", MODULE_PATH_ALPHA)
         print("✅ 成功导入模块alpha")
         
         # 计算预期的帧数
@@ -462,15 +462,15 @@ def run_module_a(fit_path, lap_start, lap_end, generate_hud, generate_map, gener
         
         # 更新审计信息
         audit_info.update({
-            'generate_hud_a': generate_hud,
-            'generate_map_a': generate_map,
-            'generate_elevation_a': generate_elevation,
-            'hud_fps_a': hud_fps,
-            'map_fps_a': map_fps,
-            'elevation_fps_a': elevation_fps,
-            'hud_frame_count_a': hud_frame_count,
-            'map_frame_count_a': map_frame_count,
-            'elevation_frame_count_a': elevation_frame_count
+            'generate_hud_alpha': generate_hud,
+            'generate_map_alpha': generate_map,
+            'generate_elevation_alpha': generate_elevation,
+            'hud_fps_alpha': hud_fps,
+            'map_fps_alpha': map_fps,
+            'elevation_fps_alpha': elevation_fps,
+            'hud_frame_count_alpha': hud_frame_count,
+            'map_frame_count_alpha': map_frame_count,
+            'elevation_frame_count_alpha': elevation_frame_count
         })
         
         # 显示开始信息
@@ -489,7 +489,7 @@ def run_module_a(fit_path, lap_start, lap_end, generate_hud, generate_map, gener
         start_time = time.time()
         
         # 调用模块alpha的生成函数
-        result_a = module_a.generate_hud_map_elevation_video(
+        result_alpha = module_alpha.generate_hud_map_elevation_video(
             fit_path=fit_path,
             lap_start=lap_start,
             lap_end=lap_end,
@@ -503,24 +503,24 @@ def run_module_a(fit_path, lap_start, lap_end, generate_hud, generate_map, gener
         
         # 记录结束时间
         end_time = time.time()
-        total_time_a = end_time - start_time
+        total_time_alpha = end_time - start_time
         
         # 更新审计信息
         audit_info.update({
-            'result_a': result_a,
-            'total_time_a': total_time_a,
-            'success_a': True
+            'result_alpha': result_alpha,
+            'total_time_alpha': total_time_alpha,
+            'success_alpha': True
         })
         
-        print(f"\n模块alpha运行完成，耗时: {total_time_a:.2f}秒")
+        print(f"\n模块alpha运行完成，耗时: {total_time_alpha:.2f}秒")
         
         # 显示结果
-        if result_a:
+        if result_alpha:
             print("\n模块alpha生成结果:")
-            for key, value in result_a.items():
+            for key, value in result_alpha.items():
                 print(f"  {key}: {value}")
         
-        return {'success': True, 'result': result_a, 'total_time': total_time_a}
+        return {'success': True, 'result': result_alpha, 'total_time': total_time_alpha}
         
     except Exception as e:
         print(f"❌ 模块alpha运行失败: {e}")
@@ -528,13 +528,13 @@ def run_module_a(fit_path, lap_start, lap_end, generate_hud, generate_map, gener
         
         error_msg = str(e)
         audit_info.update({
-            'success_a': False,
-            'error_a': error_msg
+            'success_alpha': False,
+            'error_alpha': error_msg
         })
         
         return {'success': False, 'error': error_msg}
 
-def run_module_c(fit_path, lap_start, lap_end, audit_info):
+def run_module_beta(fit_path, lap_start, lap_end, audit_info):
     """运行模块beta并收集结果"""
     print("\n" + "="*60)
     print("开始运行模块beta")
@@ -542,13 +542,13 @@ def run_module_c(fit_path, lap_start, lap_end, audit_info):
     
     try:
         # 检查模块文件是否存在
-        if not os.path.exists(MODULE_PATH_C):
-            error_msg = f"找不到模块beta文件: {MODULE_PATH_C}"
+        if not os.path.exists(MODULE_PATH_BETA):
+            error_msg = f"找不到模块beta文件: {MODULE_PATH_BETA}"
             print(f"❌ {error_msg}")
             return {'success': False, 'error': error_msg}
         
         # 动态导入模块beta
-        module_c = load_module_from_path("module_c", MODULE_PATH_C)
+        module_beta = load_module_from_path("module_beta", MODULE_PATH_BETA)
         print("✅ 成功导入模块beta")
         
         # 检查模块beta是否有可调用的函数
@@ -563,17 +563,17 @@ def run_module_c(fit_path, lap_start, lap_end, audit_info):
         # 模块beta的默认FPS（从模块beta的配置中获取，或者使用默认值）
         # 我们需要从模块beta中导入这些值，如果不可用则使用默认值
         try:
-            time_fps = module_c.FPS_TIME
+            time_fps = module_beta.FPS_TIME
         except AttributeError:
             time_fps = 1
         
         try:
-            distance_fps = module_c.FPS_DISTANCE
+            distance_fps = module_beta.FPS_DISTANCE
         except AttributeError:
             distance_fps = 5
         
         try:
-            elevation_fps = module_c.FPS_ELEVATION
+            elevation_fps = module_beta.FPS_ELEVATION
         except AttributeError:
             elevation_fps = 5
         
@@ -585,15 +585,15 @@ def run_module_c(fit_path, lap_start, lap_end, audit_info):
         
         # 更新审计信息
         audit_info.update({
-            'generate_time_c': generate_time,
-            'generate_distance_c': generate_distance,
-            'generate_elevation_c': generate_elevation,
-            'time_fps_c': time_fps,
-            'distance_fps_c': distance_fps,
-            'elevation_fps_c': elevation_fps,
-            'time_frame_count_c': time_frame_count,
-            'distance_frame_count_c': distance_frame_count,
-            'elevation_frame_count_c': elevation_frame_count
+            'generate_time_beta': generate_time,
+            'generate_distance_beta': generate_distance,
+            'generate_elevation_beta': generate_elevation,
+            'time_fps_beta': time_fps,
+            'distance_fps_beta': distance_fps,
+            'elevation_fps_beta': elevation_fps,
+            'time_frame_count_beta': time_frame_count,
+            'distance_frame_count_beta': distance_frame_count,
+            'elevation_frame_count_beta': elevation_frame_count
         })
         
         # 显示开始信息
@@ -609,12 +609,12 @@ def run_module_c(fit_path, lap_start, lap_end, audit_info):
         
         # 尝试调用模块beta的生成函数
         # 我们假设模块beta有一个generate_videos函数可以接受参数
-        result_c = None
+        result_beta = None
         
         # 方法1: 尝试调用generate_videos_from_fit函数
-        if hasattr(module_c, 'generate_videos_from_fit'):
+        if hasattr(module_beta, 'generate_videos_from_fit'):
             print("调用模块beta的generate_videos_from_fit函数...")
-            result_c = module_c.generate_videos_from_fit(
+            result_beta = module_beta.generate_videos_from_fit(
                 fit_path=fit_path,
                 lap_start=lap_start,
                 lap_end=lap_end,
@@ -623,40 +623,40 @@ def run_module_c(fit_path, lap_start, lap_end, audit_info):
                 generate_elevation=generate_elevation
             )
         # 方法2: 尝试调用main函数
-        elif hasattr(module_c, 'main'):
+        elif hasattr(module_beta, 'main'):
             print("警告: 模块beta没有generate_videos_from_fit函数，尝试调用main函数...")
             # 由于main函数可能需要用户交互，这里可能需要特殊处理
             # 我们可以设置一些全局变量来模拟用户输入
-            result_c = module_c.main()
+            result_beta = module_beta.main()
         else:
             error_msg = "模块beta没有可调用的生成函数"
             print(f"❌ {error_msg}")
             audit_info.update({
-                'success_c': False,
-                'error_c': error_msg
+                'success_beta': False,
+                'error_beta': error_msg
             })
             return {'success': False, 'error': error_msg}
         
         # 记录结束时间
         end_time = time.time()
-        total_time_c = end_time - start_time
+        total_time_beta = end_time - start_time
         
         # 更新审计信息
         audit_info.update({
-            'result_c': result_c or {},
-            'total_time_c': total_time_c,
-            'success_c': True
+            'result_beta': result_beta or {},
+            'total_time_beta': total_time_beta,
+            'success_beta': True
         })
         
-        print(f"\n模块beta运行完成，耗时: {total_time_c:.2f}秒")
+        print(f"\n模块beta运行完成，耗时: {total_time_beta:.2f}秒")
         
         # 显示结果
-        if result_c and isinstance(result_c, dict):
+        if result_beta and isinstance(result_beta, dict):
             print("\n模块beta生成结果:")
-            for key, value in result_c.items():
+            for key, value in result_beta.items():
                 print(f"  {key}: {value}")
         
-        return {'success': True, 'result': result_c, 'total_time': total_time_c}
+        return {'success': True, 'result': result_beta, 'total_time': total_time_beta}
         
     except Exception as e:
         print(f"❌ 模块beta运行失败: {e}")
@@ -664,14 +664,14 @@ def run_module_c(fit_path, lap_start, lap_end, audit_info):
         
         error_msg = str(e)
         audit_info.update({
-            'success_c': False,
-            'error_c': error_msg
+            'success_beta': False,
+            'error_beta': error_msg
         })
         
         return {'success': False, 'error': error_msg}
 
-def get_auto_run_c_choice():
-    """询问用户是否在A运行后自动运行C"""
+def get_auto_run_beta_choice():
+    """询问用户是否在alpha运行后自动运行beta"""
     print("\n" + "="*50)
     print("是否在模块alpha运行后自动运行模块beta？")
     print("="*50)
@@ -704,10 +704,10 @@ def main():
         'selected_lap_indices': [],
         'selected_laps': [],
         'total_time': 0,
-        'success_a': True,
-        'success_c': True,
-        'error_a': None,
-        'error_c': None
+        'success_alpha': True,
+        'success_beta': True,
+        'error_alpha': None,
+        'error_beta': None
     }
     
     try:
@@ -767,21 +767,21 @@ def main():
             return
         
         # 询问是否自动运行模块beta
-        auto_run_c = get_auto_run_c_choice()
-        if auto_run_c is None:
+        auto_run_beta = get_auto_run_beta_choice()
+        if auto_run_beta is None:
             print("用户取消操作")
             audit_info['total_time'] = time.time() - total_start_time
             write_audit_log(audit_info)
             return
         
         # 运行模块alpha
-        result_a = run_module_a(fit_path, lap_start, lap_end, generate_hud, generate_map, generate_elevation,
+        result_alpha = run_module_alpha(fit_path, lap_start, lap_end, generate_hud, generate_map, generate_elevation,
                               hud_fps, map_fps, elevation_fps, audit_info)
         
         # 如果需要，运行模块beta
-        result_c = None
-        if auto_run_c and result_a.get('success', False):
-            result_c = run_module_c(fit_path, lap_start, lap_end, audit_info)
+        result_beta = None
+        if auto_run_beta and result_alpha.get('success', False):
+            result_beta = run_module_beta(fit_path, lap_start, lap_end, audit_info)
         
         # 计算总时间
         total_end_time = time.time()
@@ -794,9 +794,9 @@ def main():
         print("\n" + "="*60)
         print("处理完成")
         print("="*60)
-        print(f"模块alpha状态: {'成功' if result_a.get('success') else '失败'}")
-        if auto_run_c:
-            print(f"模块beta状态: {'成功' if result_c and result_c.get('success') else '未运行或失败'}")
+        print(f"模块alpha状态: {'成功' if result_alpha.get('success') else '失败'}")
+        if auto_run_beta:
+            print(f"模块beta状态: {'成功' if result_beta and result_beta.get('success') else '未运行或失败'}")
         print(f"总耗时: {audit_info['total_time']:.2f}秒")
         print(f"审计日志: {os.path.abspath(LOG_FILE)}")
         
