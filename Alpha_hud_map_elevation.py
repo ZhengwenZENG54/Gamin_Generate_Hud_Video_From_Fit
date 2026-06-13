@@ -19,11 +19,11 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                                generate_hud=True,
                                generate_map=True,
                                generate_elevation=True,
-                               hud_fps=30,  # 新增：HUD视频的FPS
-                               map_fps=5,  # 新增：地图视频的FPS
-                               elevation_fps=5):  # 新增：海拔视频的FPS
+                               hud_fps=30,
+                               map_fps=5,
+                               elevation_fps=5):
     """
-    从FIT文件生成HUD、地图和海拔叠加视频
+    从FIT文件生成HUD、地图和海拔叠加视频（海拔图基于距离）
     
     参数:
     ----------
@@ -168,10 +168,11 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         print(f"[DEBUG] 第一条记录时间: {recs[0]['timestamp']} (UTC)")
         print(f"[DEBUG] 总记录数: {len(recs)}")
 
-        offs, spd, pwr, hr, cad, lats, lons, alts = [], [], [], [], [], [], [], []
+        offs, spd, pwr, hr, cad, lats, lons, alts, dists = [], [], [], [], [], [], [], [], []
         lat_found = False
         lon_found = False
         alt_found = False
+        dist_found = False
         
         for r in recs:
             ts = r['timestamp']
@@ -219,12 +220,21 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                 alts.append(alt)
             else:
                 alts.append(np.nan)
+            
+            # 距离数据 - 新增
+            dist = r.get('distance')
+            if dist is not None:
+                dist_found = True
+                dists.append(dist)
+            else:
+                dists.append(np.nan)
 
         if not offs:
             raise RuntimeError("指定时间范围内没有数据")
 
         print(f"[DEBUG] GPS数据: 纬度{'已找到' if lat_found else '未找到'}, 经度{'已找到' if lon_found else '未找到'}")
         print(f"[DEBUG] 海拔数据: {'已找到' if alt_found else '未找到'}")
+        print(f"[DEBUG] 距离数据: {'已找到' if dist_found else '未找到'}")
         print(f"[DEBUG] 过滤后有效记录数: {len(offs)}条")
         print(f"[DEBUG] 实际数据时间范围: {min(offs):.1f}-{max(offs):.1f}秒")
         
@@ -241,6 +251,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             'lats':    np.array(lats),
             'lons':    np.array(lons),
             'alts':    np.array(alts),
+            'dists':   np.array(dists),  # 新增距离数组
         }
     
     def interpolate(data, duration_sec, fps):
@@ -268,42 +279,42 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         
         interp = lambda arr: interp1d(x, arr, kind='linear', fill_value="extrapolate")(time_points)
         
-        # 对GPS数据进行线性插值
-        # 注意：需要处理NaN值
+        # GPS插值
         lats = data['lats']
         lons = data['lons']
-        
-        # 创建掩码，标识哪些点是有效的GPS点
         valid_gps_mask = ~(np.isnan(lats) | np.isnan(lons))
         
         if np.any(valid_gps_mask):
-            # 至少有部分GPS数据
             valid_x = x[valid_gps_mask]
             valid_lats = lats[valid_gps_mask]
             valid_lons = lons[valid_gps_mask]
-            
-            # 对有效GPS数据进行插值
             interp_lats = interp1d(valid_x, valid_lats, kind='linear', fill_value="extrapolate")(time_points)
             interp_lons = interp1d(valid_x, valid_lons, kind='linear', fill_value="extrapolate")(time_points)
         else:
-            # 没有GPS数据，全部设为NaN
             interp_lats = np.full_like(time_points, np.nan)
             interp_lons = np.full_like(time_points, np.nan)
         
-        # 对海拔数据进行线性插值
+        # 海拔插值
         alts = data['alts']
         valid_alt_mask = ~np.isnan(alts)
         
         if np.any(valid_alt_mask):
-            # 至少有部分海拔数据
             valid_x_alt = x[valid_alt_mask]
             valid_alts = alts[valid_alt_mask]
-            
-            # 对有效海拔数据进行插值
             interp_alts = interp1d(valid_x_alt, valid_alts, kind='linear', fill_value="extrapolate")(time_points)
         else:
-            # 没有海拔数据，全部设为NaN
             interp_alts = np.full_like(time_points, np.nan)
+        
+        # 距离插值 - 新增
+        dists = data['dists']
+        valid_dist_mask = ~np.isnan(dists)
+        
+        if np.any(valid_dist_mask):
+            valid_x_dist = x[valid_dist_mask]
+            valid_dists = dists[valid_dist_mask]
+            interp_dists = interp1d(valid_x_dist, valid_dists, kind='linear', fill_value="extrapolate")(time_points)
+        else:
+            interp_dists = np.full_like(time_points, np.nan)
         
         result = {
             'speed': interp_speed_clean,
@@ -313,20 +324,22 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             'lats':  interp_lats,
             'lons':  interp_lons,
             'alts':  interp_alts,
-            'time_points': time_points,  # 返回时间点
+            'dists': interp_dists,  # 新增插值后的距离
+            'time_points': time_points,
         }
         
         zero_count = np.sum(result['speed'] < 0.1)
         print(f"[停车段识别] 识别出{np.sum(stop_flags)}个插值点处于停车状态")
         print(f"[最终过滤] 零速点比例: {zero_count}/{len(result['speed'])} ({(zero_count/len(result['speed']))*100:.1f}%)")
         
-        # 统计有效GPS数据
         valid_gps_count = np.sum(~np.isnan(interp_lats))
         print(f"[GPS数据] 插值后有效GPS点数: {valid_gps_count}/{len(interp_lats)} ({(valid_gps_count/len(interp_lats))*100:.1f}%)")
         
-        # 统计有效海拔数据
         valid_alt_count = np.sum(~np.isnan(interp_alts))
         print(f"[海拔数据] 插值后有效海拔点数: {valid_alt_count}/{len(interp_alts)} ({(valid_alt_count/len(interp_alts))*100:.1f}%)")
+        
+        valid_dist_count = np.sum(~np.isnan(interp_dists))
+        print(f"[距离数据] 插值后有效距离点数: {valid_dist_count}/{len(interp_dists)} ({(valid_dist_count/len(interp_dists))*100:.1f}%)")
         
         return result
     
@@ -417,70 +430,69 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         
         return pixel_x, pixel_y, min_lat, max_lat, min_lon, max_lon
     
-    def normalize_elevation(alts, time_points, margin=elevation_margin, time_margin_factor=0.05):
+    def normalize_elevation_by_distance(alts, dists, margin=elevation_margin):
         """
-        将海拔数据归一化到像素坐标
+        基于距离归一化海拔数据（替换原来的时间归一化）
         
         参数:
         ----------
         alts : array
             海拔数据数组（可能包含NaN）
-        time_points : array
-            时间点数组
+        dists : array
+            距离数据数组（可能包含NaN）
         margin : float
-            垂直边距比例
-        time_margin_factor : float
-            水平（时间）边距比例
+            边距比例
                 
         返回值:
         ----------
-        pixel_x, pixel_y, min_alt, max_alt, min_time, max_time
+        pixel_x, pixel_y, min_alt, max_alt, min_dist, max_dist
         """
-        # 找到有效的海拔点
-        valid_mask = ~np.isnan(alts)
+        # 过滤有效数据
+        valid_mask = ~(np.isnan(alts) | np.isnan(dists))
         valid_alts = alts[valid_mask]
-        valid_times = time_points[valid_mask]
+        valid_dists = dists[valid_mask]
         
-        if len(valid_alts) == 0:
+        if len(valid_alts) == 0 or len(valid_dists) == 0:
             return None, None, None, None, None, None
         
         # 计算海拔范围
         min_alt, max_alt = np.min(valid_alts), np.max(valid_alts)
-        
-        # 添加边距
         alt_range = max_alt - min_alt
         if alt_range == 0:
             alt_range = 0.0001
+        
+        # 计算距离范围
+        min_dist, max_dist = np.min(valid_dists), np.max(valid_dists)
+        dist_range = max_dist - min_dist
+        if dist_range == 0:
+            dist_range = 0.0001
+        
+        # 添加边距
         alt_margin = alt_range * margin
+        dist_margin = dist_range * margin
+        
         min_alt -= alt_margin
         max_alt += alt_margin
+        min_dist -= dist_margin
+        max_dist += dist_margin
         
-        # 时间范围 - 添加边距
-        min_time, max_time = np.min(valid_times), np.max(valid_times)
-        time_range = max_time - min_time
-        if time_range == 0:
-            time_range = 0.0001
-        time_margin = time_range * time_margin_factor  # 使用新的时间边距参数
-        min_time -= time_margin
-        max_time += time_margin
-    
         # 归一化函数
-        def normalize(alt, time):
-            if np.isnan(alt):
+        def normalize(alt, dist):
+            if np.isnan(alt) or np.isnan(dist):
                 return np.nan, np.nan
-            # X轴：时间归一化到0-1，添加了边距
-            norm_x = (time - min_time) / (max_time - min_time)
-            # 修改点3：修正海拔上下翻转，移除1.0 -
-            norm_y = (alt - min_alt) / (max_alt - min_alt)  # 修改：去掉1.0 -
+            # X轴：距离归一化到0-1
+            norm_x = (dist - min_dist) / (max_dist - min_dist)
+            # Y轴：海拔归一化到0-1（不翻转）
+            norm_y = (alt - min_alt) / (max_alt - min_alt)
             return norm_x, norm_y
         
         # 归一化所有点
         normalized_coords = []
-        for i, (alt, time) in enumerate(zip(alts, time_points)):
-            if np.isnan(alt):
+        for alt, dist in zip(alts, dists):
+            if np.isnan(alt) or np.isnan(dist):
                 normalized_coords.append((np.nan, np.nan))
             else:
-                norm_x, norm_y = normalize(alt, time)
+                norm_x, norm_y = normalize(alt, dist)
                 normalized_coords.append((norm_x, norm_y))
         
         # 转换为像素坐标
@@ -497,7 +509,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         pixel_x = [c[0] for c in pixel_coords]
         pixel_y = [c[1] for c in pixel_coords]
         
-        return pixel_x, pixel_y, min_alt, max_alt, min_time, max_time
+        return pixel_x, pixel_y, min_alt, max_alt, min_dist, max_dist
     
     def format_value(value, value_type):
         if value_type == 'speed':
@@ -927,7 +939,21 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         validate_frames(map_frame_count, OUTPUT_DIR_MAP, "frame_map_")
         return map_frames_rendered
     
-    def render_elevation_frames(data_intp_elevation, pixel_x_elev, pixel_y_elev, duration_sec):
+    def render_elevation_frames(data_intp_elevation, pixel_x_elev, pixel_y_elev, dists, duration_sec):
+        """
+        基于距离渲染海拔帧（优化版，O(N)时间复杂度）
+        
+        参数:
+        ----------
+        data_intp_elevation : dict
+            插值后的数据
+        pixel_x_elev, pixel_y_elev : list
+            海拔曲线的像素坐标
+        dists : array
+            插值后的距离数据
+        duration_sec : float
+            总时长（秒）
+        """
         if not generate_elevation:
             return 0
             
@@ -997,6 +1023,22 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         start_time = time.time()
         elevation_frames_rendered = 0
         
+        # ===== 优化：使用指针追踪已绘制的点，避免O(N²)复杂度 =====
+        completed_x_list = []
+        completed_y_list = []
+        drawn_point_index = 0  # 指向下一个待检查的点
+        total_points = len(pixel_x_elev)
+        
+        # 预计算所有有效点的索引，避免每帧检查NaN
+        valid_indices = []
+        for i in range(total_points):
+            if i < len(dists) and not np.isnan(dists[i]):
+                if i < len(pixel_x_elev) and i < len(pixel_y_elev):
+                    px = pixel_x_elev[i]
+                    py = pixel_y_elev[i]
+                    if not (np.isnan(px) or np.isnan(py)):
+                        valid_indices.append(i)
+        
         # 存储已完成轨迹的点
         completed_x_list = []
         completed_y_list = []
@@ -1019,17 +1061,37 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                 )
                 last_print_time = current_time
             
-            # 获取当前坐标
-            current_x, current_y = pixel_x_elev[idx], pixel_y_elev[idx]
+            # 获取当前距离
+            current_dist = dists[idx] if idx < len(dists) else np.nan
             
-            if not (np.isnan(current_x) or np.isnan(current_y)):
-                # 增量更新轨迹
-                completed_x_list.append(current_x)
-                completed_y_list.append(current_y)
+            if not np.isnan(current_dist):
+                # ===== 优化：增量添加点，而不是重新遍历所有历史点 =====
+                # 只检查尚未绘制的点，当点的距离超过当前距离时停止
+                while drawn_point_index < len(valid_indices):
+                    point_idx = valid_indices[drawn_point_index]
+                    
+                    # 如果这个点的距离超过了当前距离，停止添加
+                    if point_idx >= len(dists) or np.isnan(dists[point_idx]) or dists[point_idx] > current_dist:
+                        break
+                    
+                    # 添加这个点
+                    px = pixel_x_elev[point_idx]
+                    py = pixel_y_elev[point_idx]
+                    completed_x_list.append(px)
+                    completed_y_list.append(py)
+                    drawn_point_index += 1
+                
+                # 更新线条数据
                 completed_line.set_data(completed_x_list, completed_y_list)
                 
-                # 更新标记位置
-                marker.set_offsets([(current_x, current_y)])
+                # 当前位置标记 - 使用最近的有效点
+                if valid_indices and drawn_point_index > 0:
+                    last_valid_idx = valid_indices[drawn_point_index - 1]
+                    if last_valid_idx < len(pixel_x_elev) and last_valid_idx < len(pixel_y_elev):
+                        current_x = pixel_x_elev[last_valid_idx]
+                        current_y = pixel_y_elev[last_valid_idx]
+                        if not (np.isnan(current_x) or np.isnan(current_y)):
+                            marker.set_offsets([(current_x, current_y)])
             
             # 保存帧
             path = os.path.join(OUTPUT_DIR_ELEVATION, f"frame_elevation_{idx:06d}.png")
@@ -1104,23 +1166,20 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         else:
             pixel_x_map = pixel_y_map = None
         
-        # 4. 处理海拔坐标
+        # 4. 处理海拔坐标（基于距离）
         if generate_elevation and data_intp_elevation is not None:
-            print("\n[步骤4/6] 处理海拔坐标...")
-            # 修改这里，添加 time_margin_factor 参数
-            pixel_x_elev, pixel_y_elev, min_alt, max_alt, min_time, max_time = normalize_elevation(
+            print("\n[步骤4/6] 处理海拔坐标（基于距离）...")
+            pixel_x_elev, pixel_y_elev, min_alt, max_alt, min_dist, max_dist = normalize_elevation_by_distance(
                 data_intp_elevation['alts'], 
-                data_intp_elevation['time_points'],
-                margin=elevation_margin,
-                time_margin_factor=0.05  # 新增：时间边距，5%
+                data_intp_elevation['dists']
             )
             
             if pixel_x_elev is None:
-                print("[警告] 没有有效的海拔数据，将跳过海拔视频生成")
+                print("[警告] 没有有效的海拔或距离数据，将跳过海拔视频生成")
                 generate_elevation = False
             else:
                 print(f"[海拔范围] {min_alt:.1f}米 到 {max_alt:.1f}米 (跨度: {max_alt-min_alt:.1f}米)")
-                print(f"[时间范围] {min_time:.1f}秒 到 {max_time:.1f}秒 (时长: {max_time-min_time:.1f}秒)")
+                print(f"[距离范围] {min_dist:.1f}米 到 {max_dist:.1f}米 (总长: {max_dist-min_dist:.1f}米)")
         else:
             pixel_x_elev = pixel_y_elev = None
         
@@ -1166,7 +1225,13 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             
             def render_elevation_thread():
                 try:
-                    frames = render_elevation_frames(data_intp_elevation, pixel_x_elev, pixel_y_elev, duration)
+                    frames = render_elevation_frames(
+                        data_intp_elevation, 
+                        pixel_x_elev, 
+                        pixel_y_elev, 
+                        data_intp_elevation['dists'],  # 传递距离数组
+                        duration
+                    )
                     results['elevation']['frames'] = frames
                     results['elevation']['success'] = True
                 except Exception as e:
@@ -1226,7 +1291,13 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             
             if generate_elevation and data_intp_elevation is not None and pixel_x_elev is not None:
                 try:
-                    elevation_frames_done = render_elevation_frames(data_intp_elevation, pixel_x_elev, pixel_y_elev, duration)
+                    elevation_frames_done = render_elevation_frames(
+                        data_intp_elevation, 
+                        pixel_x_elev, 
+                        pixel_y_elev, 
+                        data_intp_elevation['dists'],  # 传递距离数组
+                        duration
+                    )
                     elevation_success = True
                 except Exception as e:
                     print(f"[海拔渲染错误] {e}")

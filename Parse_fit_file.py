@@ -1,4 +1,4 @@
-FP = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-06-04-18-56-34.fit"
+FP = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-06-09-07-49-20.fit"
 # # # import numpy as np
 # # # # from fitparse import FitFile
 # # # # import matplotlib.pyplot as plt
