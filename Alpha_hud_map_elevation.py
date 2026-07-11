@@ -70,15 +70,15 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     
     # 地图样式参数
     map_line_width = 5
-    map_line_color = (1.0, 0.5, 0.0, 0.5)  # RGBA: 橙色半透明
+    map_line_color = (1.0, 0.5, 0.0, 1.0)  # RGBA: 橙色不透明 map_line_color = (1.0, 0.5, 0.0, 0.5)  # RGBA: 橙色半透明
     map_completed_color = (0.0, 0.6, 1.0, 1.0)  # RGBA: 蓝色
     map_marker_color = (1.0, 0.0, 0.0, 1.0)  # RGBA: 红色
-    map_marker_size = 12
+    map_marker_size = 15 #12
     map_marker_type = 'triangle'  # 标记类型
     map_background_color = (0.0, 0.0, 0.0, 0.0)  # RGBA: 完全透明
     map_circle_bg_color = (0.2, 0.2, 0.2, 0.6)  # RGBA: 灰色半透明背景
     map_circle_padding_percent = 10  # 圆形背景的内边距百分比
-    map_show_grid = False
+    map_show_grid = False  # 禁用网格
     map_grid_color = (1.0, 1.0, 1.0, 0.1)  # RGBA: 白色半透明
     map_grid_spacing = 0.2
     map_margin = 0.1  # 边距比例(0-0.5)
@@ -88,7 +88,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     elevation_completed_color = (0.0, 0.8, 0.0, 1.0)  # RGBA: 绿色
     elevation_background_color = (1.0, 1.0, 1.0, 0.2)  # RGBA: 白色半透明
     elevation_marker_color = (1.0, 0.0, 0.0, 1.0)  # RGBA: 红色
-    elevation_marker_size = 10
+    elevation_marker_size = 12 #10
     elevation_show_grid = False  # 禁用网格
     elevation_grid_color = (0.5, 0.5, 0.5, 0.3)  # RGBA: 灰色半透明
     elevation_grid_spacing_x = 0.1  # X轴网格间距（时间比例）

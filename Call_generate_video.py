@@ -881,6 +881,12 @@ def run_module_beta(fit_path, lap_start, lap_end, audit_info, generate_time, gen
         end_time = time.time()
         total_time_beta = end_time - start_time
         
+        # 假设 beta 模块在失败时会返回一个带有 'error' 键的字典
+        if isinstance(result_beta, dict) and result_beta.get('error'):
+            raise RuntimeError(f"Beta模块返回错误: {result_beta['error']}")
+        elif result_beta is None:
+            raise RuntimeError("Beta模块返回空值，可能未正确执行")
+        
         # 更新审计信息
         audit_info.update({
             'result_beta': result_beta or {},

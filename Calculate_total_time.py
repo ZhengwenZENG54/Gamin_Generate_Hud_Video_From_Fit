@@ -291,13 +291,13 @@ if __name__ == "__main__":
     try:
         # 使用你喜欢的参数格式
         result = calculate_total_time(
-            lap_total_time=3600,
+            lap_total_time=43200,
             alpha_hud_fps=30,
-            alpha_map_fps=5,
-            alpha_elev_fps=5,
+            alpha_map_fps=1,
+            alpha_elev_fps=1,
             beta_time_fps=1,
-            beta_dist_fps=5,
-            beta_elev_fps=5
+            beta_dist_fps=1,
+            beta_elev_fps=1
         )
         
     except Exception as e:
