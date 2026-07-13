@@ -61,7 +61,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     # 视频参数 - 分别设置FPS
     width, height = 480, 270
     font_size = 25
-    print_interval = 10
+    print_interval = 1
     speed_threshold = 3.0
     
     # 控制参数
@@ -108,7 +108,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     ELEVATION_HEIGHT = int(ELEVATION_WIDTH / elevation_aspect_ratio)  # 根据宽度和长宽比计算高度
     FONT_SIZE = font_size
     PRINT_INTERVAL = print_interval
-    SPEED_THRESHOLD = speed_threshold
+    SPEED_THRESHOLD = speed_threshold #速成小于该值认为是停车/推车步行
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     OUTPUT_MOV_HUD = f"alpha_hud__{timestamp}.mov"

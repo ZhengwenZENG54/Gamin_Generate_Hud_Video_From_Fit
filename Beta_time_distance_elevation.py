@@ -103,6 +103,9 @@ GENERATE_ELEVATION_VIDEO = True
 
 # 新增：批处理设置
 BATCH_SIZE = 100  # 批处理大小，每生成多少帧保存一次进度
+
+# 进度打印间隔（秒）
+PRINT_INTERVAL = 1.0
 # =====================================================
 
 def find_latest_fit_file():
@@ -613,7 +616,7 @@ def generate_elevation_frames_batch(interp_times, interp_elevations, width, heig
     return frames_generated
 
 def generate_time_frames(lap_start, lap_end, width, height, time_font):
-    """生成时间戳帧序列"""
+    """生成时间戳帧序列（使用定时打印进度）"""
     print(f"\n[时间视频] 开始生成时间戳帧...")
     
     # 清理临时目录
@@ -632,15 +635,39 @@ def generate_time_frames(lap_start, lap_end, width, height, time_font):
     print(f"[时间视频] 视频尺寸: {width}x{height}")
     
     start_time = time.time()
-    
-    # 使用批处理和进度条
+    last_print_time = start_time
     frame_count = 0
-    with tqdm(total=total_frames, desc="生成时间帧", unit="帧") as pbar:
-        for batch_start in range(0, total_frames, BATCH_SIZE):
-            batch_end = min(batch_start + BATCH_SIZE, total_frames)
-            frames_generated = generate_time_frames_batch(lap_start, lap_end, width, height, time_font, batch_start, batch_end)
-            frame_count += frames_generated
-            pbar.update(frames_generated)
+    
+    for i in range(total_frames):
+        # 定时打印进度
+        current_time = time.time()
+        if current_time - last_print_time >= PRINT_INTERVAL:
+            elapsed = current_time - start_time
+            processed = i + 1
+            fps_actual = processed / elapsed if elapsed > 0 else 0
+            remaining = (total_frames - processed) / fps_actual if fps_actual > 0 else 0
+            print(f"[时间进度] {processed}/{total_frames}帧 | "
+                  f"已用: {elapsed:.1f}s | 剩余: {remaining:.1f}s | "
+                  f"速度: {fps_actual:.1f}帧/s")
+            last_print_time = current_time
+        
+        # 计算当前时间点
+        current_time_utc = lap_start + timedelta(seconds=i / FPS_TIME)
+        
+        # 转换为北京时间
+        current_time_beijing = current_time_utc + timedelta(hours=TIMEZONE_OFFSET)
+        
+        # 格式化时间字符串
+        timestamp_str = current_time_beijing.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 创建帧
+        frame = create_time_frame(timestamp_str, width, height, time_font)
+        
+        # 保存帧
+        frame_path = os.path.join(OUTPUT_DIR_TIME, f"frame_{i:06d}.png")
+        frame.save(frame_path, 'PNG')
+        
+        frame_count += 1
     
     elapsed = time.time() - start_time
     fps_actual = frame_count / elapsed if elapsed > 0 else 0
@@ -648,8 +675,9 @@ def generate_time_frames(lap_start, lap_end, width, height, time_font):
     print(f"✅ 时间帧生成完成: {frame_count}帧, 耗时: {elapsed:.2f}秒, 平均速度: {fps_actual:.1f}帧/秒")
     return frame_count
 
+
 def generate_distance_frames(interp_times, interp_distances, width, height, dist_font):
-    """生成距离帧序列"""
+    """生成距离帧序列（使用定时打印进度）"""
     print(f"\n[距离视频] 开始生成距离帧...")
     
     # 清理临时目录
@@ -665,15 +693,33 @@ def generate_distance_frames(interp_times, interp_distances, width, height, dist
     print(f"[距离视频] 距离范围: {min(interp_distances)/1000:.2f}km 到 {max(interp_distances)/1000:.2f}km")
     
     start_time = time.time()
-    
-    # 使用批处理和进度条
+    last_print_time = start_time
     frame_count = 0
-    with tqdm(total=total_frames, desc="生成距离帧", unit="帧") as pbar:
-        for batch_start in range(0, total_frames, BATCH_SIZE):
-            batch_end = min(batch_start + BATCH_SIZE, total_frames)
-            frames_generated = generate_distance_frames_batch(interp_times, interp_distances, width, height, dist_font, batch_start, batch_end)
-            frame_count += frames_generated
-            pbar.update(frames_generated)
+    
+    for i in range(total_frames):
+        # 定时打印进度
+        current_time = time.time()
+        if current_time - last_print_time >= PRINT_INTERVAL:
+            elapsed = current_time - start_time
+            processed = i + 1
+            fps_actual = processed / elapsed if elapsed > 0 else 0
+            remaining = (total_frames - processed) / fps_actual if fps_actual > 0 else 0
+            print(f"[距离进度] {processed}/{total_frames}帧 | "
+                  f"已用: {elapsed:.1f}s | 剩余: {remaining:.1f}s | "
+                  f"速度: {fps_actual:.1f}帧/s")
+            last_print_time = current_time
+        
+        # 获取当前距离（转换为km）
+        distance_km = interp_distances[i] / 1000.0
+        
+        # 创建帧
+        frame = create_distance_frame(distance_km, width, height, dist_font)
+        
+        # 保存帧
+        frame_path = os.path.join(OUTPUT_DIR_DISTANCE, f"frame_{i:06d}.png")
+        frame.save(frame_path, 'PNG')
+        
+        frame_count += 1
     
     elapsed = time.time() - start_time
     fps_actual = frame_count / elapsed if elapsed > 0 else 0
@@ -681,8 +727,9 @@ def generate_distance_frames(interp_times, interp_distances, width, height, dist
     print(f"✅ 距离帧生成完成: {frame_count}帧, 耗时: {elapsed:.2f}秒, 平均速度: {fps_actual:.1f}帧/秒")
     return frame_count
 
+
 def generate_elevation_frames(interp_times, interp_elevations, width, height, elev_font):
-    """生成海拔帧序列"""
+    """生成海拔帧序列（使用定时打印进度）"""
     print(f"\n[海拔视频] 开始生成海拔帧...")
     
     # 清理临时目录
@@ -698,15 +745,33 @@ def generate_elevation_frames(interp_times, interp_elevations, width, height, el
     print(f"[海拔视频] 海拔范围: {min(interp_elevations):.1f}m 到 {max(interp_elevations):.1f}m")
     
     start_time = time.time()
-    
-    # 使用批处理和进度条
+    last_print_time = start_time
     frame_count = 0
-    with tqdm(total=total_frames, desc="生成海拔帧", unit="帧") as pbar:
-        for batch_start in range(0, total_frames, BATCH_SIZE):
-            batch_end = min(batch_start + BATCH_SIZE, total_frames)
-            frames_generated = generate_elevation_frames_batch(interp_times, interp_elevations, width, height, elev_font, batch_start, batch_end)
-            frame_count += frames_generated
-            pbar.update(frames_generated)
+    
+    for i in range(total_frames):
+        # 定时打印进度
+        current_time = time.time()
+        if current_time - last_print_time >= PRINT_INTERVAL:
+            elapsed = current_time - start_time
+            processed = i + 1
+            fps_actual = processed / elapsed if elapsed > 0 else 0
+            remaining = (total_frames - processed) / fps_actual if fps_actual > 0 else 0
+            print(f"[海拔进度] {processed}/{total_frames}帧 | "
+                  f"已用: {elapsed:.1f}s | 剩余: {remaining:.1f}s | "
+                  f"速度: {fps_actual:.1f}帧/s")
+            last_print_time = current_time
+        
+        # 获取当前海拔
+        elevation_m = interp_elevations[i]
+        
+        # 创建帧
+        frame = create_elevation_frame(elevation_m, width, height, elev_font)
+        
+        # 保存帧
+        frame_path = os.path.join(OUTPUT_DIR_ELEVATION, f"frame_{i:06d}.png")
+        frame.save(frame_path, 'PNG')
+        
+        frame_count += 1
     
     elapsed = time.time() - start_time
     fps_actual = frame_count / elapsed if elapsed > 0 else 0
@@ -758,30 +823,24 @@ def compile_video_with_progress(frame_dir, output_file, frame_count, width, heig
         # 显示进度
         print(f"[视频合成] 正在合成视频，请稍候...")
         start_time = time.time()
+        last_print_time = start_time
         
-        # 读取输出并解析进度
-        frame_pattern = "frame="
+        # 读取输出并定时打印进度
         for line in process.stdout:
-            if frame_pattern in line:
-                # 尝试从ffmpeg输出中提取帧数
-                try:
-                    parts = line.split()
-                    for i, part in enumerate(parts):
-                        if frame_pattern in part:
-                            current_frame = int(part.split('=')[1])
-                            percentage = (current_frame / frame_count) * 100
-                            elapsed = time.time() - start_time
-                            if current_frame > 0 and elapsed > 0:
-                                fps_actual = current_frame / elapsed
-                                remaining_time = (frame_count - current_frame) / fps_actual if fps_actual > 0 else 0
-                                print(f"\r[视频合成] 进度: {current_frame}/{frame_count}帧 ({percentage:.1f}%) | "
-                                      f"已用: {elapsed:.1f}s | 剩余: {remaining_time:.1f}s | "
-                                      f"速度: {fps_actual:.1f}帧/s", end="")
-                            break
-                except (ValueError, IndexError):
-                    # 如果解析失败，继续
-                    pass
-            elif "error" in line.lower():
+            current_time = time.time()
+            if current_time - last_print_time >= PRINT_INTERVAL:
+                elapsed = current_time - start_time
+                # 估计已编码帧数
+                estimated_frames = int(elapsed * fps)
+                if estimated_frames > frame_count:
+                    estimated_frames = frame_count
+                percentage = (estimated_frames / frame_count) * 100 if frame_count > 0 else 0
+                remaining_time = (frame_count - estimated_frames) / fps if fps > 0 else 0
+                print(f"[视频合成] 估计进度: {estimated_frames}/{frame_count}帧 ({percentage:.1f}%) | "
+                      f"已用: {elapsed:.1f}s | 剩余: {remaining_time:.1f}s")
+                last_print_time = current_time
+            
+            if "error" in line.lower():
                 print(f"\n[视频合成警告] {line.strip()}")
         
         # 等待进程完成
@@ -1013,7 +1072,7 @@ def generate_videos_from_fit(fit_path, lap_start, lap_end,
                     print("❌ 海拔数据插值失败，跳过海拔视频生成")
                     generate_elevation = False
         
-        # 第一阶段：生成所有帧
+        # 第一阶段：生成所有帧（串行执行，保证进度打印清晰）
         if interactive:
             print(f"\n{'='*60}")
             print("第一阶段：生成所有帧")
@@ -1026,74 +1085,36 @@ def generate_videos_from_fit(fit_path, lap_start, lap_end,
         distance_success = False
         elevation_success = False
         
-        # 使用多线程并行生成帧
-        threads = []
-        results_dict = {}
-        
-        def generate_time_thread():
+        # 依次生成各类帧（串行，避免多线程打印混乱）
+        if generate_time:
             try:
-                frames = generate_time_frames(lap_start, lap_end, width, height, time_font)
-                results_dict['time_frames'] = frames
-                results_dict['time_success'] = True
+                time_frame_count = generate_time_frames(lap_start, lap_end, width, height, time_font)
+                time_success = True
+                result['time_frame_count'] = time_frame_count
             except Exception as e:
                 print(f"[时间帧生成错误] {e}")
                 traceback.print_exc()
-                results_dict['time_success'] = False
+                time_success = False
         
-        def generate_distance_thread():
+        if generate_distance:
             try:
-                frames = generate_distance_frames(interp_times_dist, interp_distances, width, height, dist_font)
-                results_dict['distance_frames'] = frames
-                results_dict['distance_success'] = True
+                distance_frame_count = generate_distance_frames(interp_times_dist, interp_distances, width, height, dist_font)
+                distance_success = True
+                result['distance_frame_count'] = distance_frame_count
             except Exception as e:
                 print(f"[距离帧生成错误] {e}")
                 traceback.print_exc()
-                results_dict['distance_success'] = False
+                distance_success = False
         
-        def generate_elevation_thread():
+        if generate_elevation:
             try:
-                frames = generate_elevation_frames(interp_times_elev, interp_elevations, width, height, elev_font)
-                results_dict['elevation_frames'] = frames
-                results_dict['elevation_success'] = True
+                elevation_frame_count = generate_elevation_frames(interp_times_elev, interp_elevations, width, height, elev_font)
+                elevation_success = True
+                result['elevation_frame_count'] = elevation_frame_count
             except Exception as e:
                 print(f"[海拔帧生成错误] {e}")
                 traceback.print_exc()
-                results_dict['elevation_success'] = False
-        
-        if generate_time:
-            t1 = threading.Thread(target=generate_time_thread)
-            threads.append(t1)
-            t1.start()
-        
-        if generate_distance:
-            t2 = threading.Thread(target=generate_distance_thread)
-            threads.append(t2)
-            t2.start()
-        
-        if generate_elevation:
-            t3 = threading.Thread(target=generate_elevation_thread)
-            threads.append(t3)
-            t3.start()
-        
-        # 等待所有线程完成
-        for thread in threads:
-            thread.join()
-        
-        # 获取结果
-        if generate_time:
-            time_frame_count = results_dict.get('time_frames', 0)
-            time_success = results_dict.get('time_success', False)
-            result['time_frame_count'] = time_frame_count
-        
-        if generate_distance:
-            distance_frame_count = results_dict.get('distance_frames', 0)
-            distance_success = results_dict.get('distance_success', False)
-            result['distance_frame_count'] = distance_frame_count
-        
-        if generate_elevation:
-            elevation_frame_count = results_dict.get('elevation_frames', 0)
-            elevation_success = results_dict.get('elevation_success', False)
-            result['elevation_frame_count'] = elevation_frame_count
+                elevation_success = False
         
         # 第二阶段：合成所有视频
         if interactive:
