@@ -29,33 +29,43 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 def get_ffmpeg_path():
-    """获取 ffmpeg 路径：优先用打包内的，其次找系统 PATH 的"""
-    # 打包内的情况
+    """获取 ffmpeg 路径：打包后使用内部资源，开发时使用系统 PATH"""
+    # 打包后
     if getattr(sys, 'frozen', False):
         bundled = resource_path("ffmpeg.exe")
         if os.path.isfile(bundled):
             return bundled
-    # 开发环境：使用系统 PATH 中的 ffmpeg（通常不依赖 SDL3）
+    # 开发环境：使用系统 PATH 中的 ffmpeg（conda 环境自带）
     import shutil
     system_ffmpeg = shutil.which("ffmpeg")
     if system_ffmpeg:
         return system_ffmpeg
-    # 如果系统没有，再尝试项目目录下的（可能依赖 SDL3）
+    # 最后尝试项目根目录下的 ffmpeg.exe（兼容旧版）
     local_ffmpeg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg.exe")
     if os.path.isfile(local_ffmpeg):
         return local_ffmpeg
     return None
-# ==================== 用户可修改的配置 ====================
-# 模块文件和 logo 路径（使用 resource_path 支持打包）
-import os
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # 仓库根目录
-RESOURCE_DIR = os.path.join(BASE_DIR, '..', 'resources')
 
-LOGO_PATH1 = os.path.join(RESOURCE_DIR, "2025单车行logo_Tr.png")
-LOGO_PATH2 = os.path.join(RESOURCE_DIR, "ZhengwenZENG.png")
-FFMPEG_PATH = os.path.join(RESOURCE_DIR, "ffmpeg.exe")
-SDL3_PATH = os.path.join(RESOURCE_DIR, "SDL3.dll")
-TCL_DIR = os.path.join(RESOURCE_DIR, "tcl")
+# ==================== 资源路径辅助函数 ====================
+def resource_path(relative_path):
+    """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的 exe"""
+    try:
+        base_path = sys._MEIPASS
+    except AttributeError:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+# ==================== 用户可修改的配置 ====================
+# 模块文件路径（使用 resource_path）
+MODULE_PATH_ALPHA = resource_path("Alpha_hud_map_elevation.py")
+MODULE_PATH_BETA  = resource_path("Beta_time_distance_elevation.py")
+
+# 资源文件路径（放在 resources 子目录下）
+LOGO_PATH1 = resource_path("resources/2025单车行logo_Tr.png")
+LOGO_PATH2 = resource_path("resources/ZhengwenZENG.png")
+FFMPEG_PATH = resource_path("resources/ffmpeg.exe")  # 仅用于打包，开发时不用
+SDL3_PATH = resource_path("resources/SDL3.dll")
+TCL_DIR = resource_path("resources/tcl")
 
 # 默认帧率
 ALPHA_HUD_FPS = 30
@@ -487,7 +497,7 @@ class FitVideoGeneratorApp(tk.Tk):
                 if ffmpeg_path is None:
                     raise RuntimeError("找不到 ffmpeg，请确保 ffmpeg.exe 与程序同在，或系统已安装 ffmpeg 并加入 PATH")
                 print(f"FFmpeg 路径: {ffmpeg_path}")
-                mod_alpha.FFMPEG_PATH = ffmpeg_path
+                mod_alpha.FFMPEG_PATH = get_ffmpeg_path()
 
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -529,7 +539,7 @@ class FitVideoGeneratorApp(tk.Tk):
                 if ffmpeg_path is None:
                     raise RuntimeError("找不到 ffmpeg，请确保 ffmpeg.exe 与程序同在，或系统已安装 ffmpeg 并加入 PATH")
                 print(f"FFmpeg 路径: {ffmpeg_path}")
-                mod_beta.FFMPEG_PATH = ffmpeg_path
+                mod_beta.FFMPEG_PATH = get_ffmpeg_path()
 
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 mod_beta.OUTPUT_DIR_TIME = os.path.join(self.output_dir, "frames_timestamp")

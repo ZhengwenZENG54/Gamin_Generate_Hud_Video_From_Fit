@@ -1,0 +1,22 @@
+# PyInstaller 输出
+build/
+dist/
+*.spec
+
+# 外部依赖（通过 Release 分发）
+resources/ffmpeg.exe
+resources/SDL3.dll
+resources/tcl/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 视频输出
+*.mov
+*.mp4
+
+#图片和文字说明
+*.png
+*.txt
