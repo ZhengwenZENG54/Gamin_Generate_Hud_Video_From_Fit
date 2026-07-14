@@ -14,6 +14,12 @@ import threading
 import cv2
 from scipy.spatial import ConvexHull
 from matplotlib.patches import Circle
+import subprocess
+import subprocess
+import ctypes, sys
+
+# ==================== 可被外部覆盖的路径变量 ====================
+FFMPEG_PATH = "ffmpeg"   # 默认使用系统 PATH 中的 ffmpeg，GUI 可修改为打包内的路径
 
 def generate_hud_map_elevation_video(fit_path, lap_start, lap_end, 
                                generate_hud=True,
@@ -51,12 +57,32 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     dict
         包含生成视频文件路径的字典
     """
-    
-    # ==================== 默认参数设置 ====================
-    # 输出目录参数
-    output_dir_hud = "frames_hud"
-    output_dir_map = "frames_map"
-    output_dir_elevation = "frames_elevation"
+    # 声明全局变量，以便外部（如GUI）可以修改输出路径
+    global OUTPUT_DIR_HUD, OUTPUT_DIR_MAP, OUTPUT_DIR_ELEVATION, \
+           OUTPUT_MOV_HUD, OUTPUT_MOV_MAP, OUTPUT_MOV_ELEVATION
+
+    # 如果这些变量尚未定义（例如独立运行），则设置默认值
+    if 'OUTPUT_DIR_HUD' not in globals():
+        OUTPUT_DIR_HUD = "frames_hud"
+    if 'OUTPUT_DIR_MAP' not in globals():
+        OUTPUT_DIR_MAP = "frames_map"
+    if 'OUTPUT_DIR_ELEVATION' not in globals():
+        OUTPUT_DIR_ELEVATION = "frames_elevation"
+    if 'OUTPUT_MOV_HUD' not in globals():
+        OUTPUT_MOV_HUD = None
+    if 'OUTPUT_MOV_MAP' not in globals():
+        OUTPUT_MOV_MAP = None
+    if 'OUTPUT_MOV_ELEVATION' not in globals():
+        OUTPUT_MOV_ELEVATION = None
+
+    # 生成时间戳并设置视频文件名（如果外部未设置）
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    if OUTPUT_MOV_HUD is None:
+        OUTPUT_MOV_HUD = f"alpha_hud__{timestamp}.mov"
+    if OUTPUT_MOV_MAP is None:
+        OUTPUT_MOV_MAP = f"alpha_map__{timestamp}.mov"
+    if OUTPUT_MOV_ELEVATION is None:
+        OUTPUT_MOV_ELEVATION = f"alpha_elev_{timestamp}.mov"
     
     # 视频参数 - 分别设置FPS
     width, height = 480, 270
@@ -96,10 +122,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     elevation_margin = 0.1  # 边距比例(0-0.5)
     elevation_aspect_ratio = 8  # 长宽比 宽度:高度
     
-    # ==================== 内部变量 ====================
-    OUTPUT_DIR_HUD = output_dir_hud
-    OUTPUT_DIR_MAP = output_dir_map
-    OUTPUT_DIR_ELEVATION = output_dir_elevation
+    # ==================== 内部变量（非路径） ====================
     HUD_FPS = hud_fps
     MAP_FPS = map_fps
     ELEVATION_FPS = elevation_fps
@@ -108,12 +131,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     ELEVATION_HEIGHT = int(ELEVATION_WIDTH / elevation_aspect_ratio)  # 根据宽度和长宽比计算高度
     FONT_SIZE = font_size
     PRINT_INTERVAL = print_interval
-    SPEED_THRESHOLD = speed_threshold #速成小于该值认为是停车/推车步行
-    
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    OUTPUT_MOV_HUD = f"alpha_hud__{timestamp}.mov"
-    OUTPUT_MOV_MAP = f"alpha_map__{timestamp}.mov"
-    OUTPUT_MOV_ELEVATION = f"alpha_elev_{timestamp}.mov"
+    SPEED_THRESHOLD = speed_threshold #速度小于该值认为是推车步行或停车
     
     def debug_print_config():
         duration = (lap_end - lap_start).total_seconds()
@@ -633,46 +651,6 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         angle_rad = math.atan2(dy, dx)
         return angle_rad
     
-    def calculate_minimum_enclosing_circle(pixel_x, pixel_y, padding_percent=map_circle_padding_percent):
-        """
-        计算轨迹的最小外接圆
-        
-        参数:
-        ----------
-        pixel_x, pixel_y : list
-            轨迹像素坐标
-        padding_percent : float
-            内边距百分比
-            
-        返回值:
-        ----------
-        center_x, center_y, radius
-        """
-        # 过滤NaN值
-        valid_points = [(x, y) for x, y in zip(pixel_x, pixel_y) if not (np.isnan(x) or np.isnan(y))]
-        
-        if not valid_points:
-            return None, None, None
-        
-        # 将点转换为numpy数组
-        points = np.array(valid_points, dtype=np.float32)
-        
-        # 使用OpenCV的minEnclosingCircle计算最小外接圆
-        (center_x, center_y), radius = cv2.minEnclosingCircle(points)
-        
-        if radius == 0:
-            # 如果半径为0，则使用边界框
-            min_x, max_x = np.min(points[:, 0]), np.max(points[:, 0])
-            min_y, max_y = np.min(points[:, 1]), np.max(points[:, 1])
-            center_x = (min_x + max_x) / 2
-            center_y = (min_y + max_y) / 2
-            radius = max(max_x - min_x, max_y - min_y) / 2
-        
-        # 添加内边距
-        radius_with_padding = radius * (1 + padding_percent / 100.0)
-        
-        return center_x, center_y, radius_with_padding
-    
     def create_perfect_circular_background(pixel_x, pixel_y, width, height, padding_percent=map_circle_padding_percent):
         """
         创建完美的圆形背景，确保轨迹完全在圆形内部
@@ -1101,29 +1079,57 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         plt.close(fig)
         validate_frames(elevation_frame_count, OUTPUT_DIR_ELEVATION, "frame_elevation_")
         return elevation_frames_rendered
-    
+
     def assemble_alpha_mov(frame_dir, output_file, frame_count, fps, prefix="frame_", width=None, height=None):
+        global FFMPEG_PATH
+
         if not os.path.exists(frame_dir):
             print(f"[错误] 帧目录不存在: {frame_dir}")
             return False
-            
+
         print(f"\n[DEBUG] 合成视频: {output_file} (FPS: {fps})")
         target_width = width or WIDTH
         target_height = height or HEIGHT
-        cmd = (
-            f'ffmpeg -y -framerate {fps} -start_number 0 -i "{frame_dir}/{prefix}%06d.png" '
-            f'-vf "scale={target_width}:{target_height},setsar=1" '
-            f'-c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le '
-            f'-frames:v {frame_count} "{output_file}"'
-        )
-        print(f"[DEBUG] FFmpeg命令:\n{cmd}")
+
+        # 构建 ffmpeg 参数列表（避免字符串拼接）
+        input_pattern = os.path.join(frame_dir, f"{prefix}%06d.png")
+        vf_filter = f"scale={target_width}:{target_height},setsar=1"
+
+        cmd = [
+            FFMPEG_PATH,
+            "-y",
+            "-framerate", str(fps),
+            "-start_number", "0",
+            "-i", input_pattern,
+            "-vf", vf_filter,
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-frames:v", str(frame_count),
+            output_file
+        ]
+
+        print(f"[DEBUG] FFmpeg命令: {' '.join(cmd)}")
         ffmpeg_start = time.time()
-        result = os.system(cmd)
-        if result != 0:
-            print(f"[警告] FFmpeg返回非零状态码: {result}")
-        ffmpeg_time = time.time() - ffmpeg_start
-        print(f"[DEBUG] FFmpeg合成耗时: {ffmpeg_time:.1f}秒")
-        return result == 0
+        try:
+            CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600,creationflags=CREATE_NO_WINDOW)
+            elapsed = time.time() - ffmpeg_start
+            if result.returncode == 0:
+                print(f"[成功] 视频生成成功: {output_file}")
+                print(f"[DEBUG] FFmpeg合成耗时: {elapsed:.1f}秒")
+                return True
+            else:
+                print(f"[警告] FFmpeg返回非零状态码: {result.returncode}")
+                print(f"[FFmpeg stderr]: {result.stderr[:500]}")
+                return False
+        except subprocess.TimeoutExpired:
+            print("[错误] FFmpeg超时（超过600秒）")
+            return False
+        except Exception as e:
+            print(f"[错误] FFmpeg执行异常: {e}")
+            return False
     
     # 主流程
     start_time_total = time.time()

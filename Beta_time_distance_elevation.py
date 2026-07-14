@@ -12,40 +12,11 @@ import numpy as np
 from scipy.interpolate import interp1d
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import traceback
-try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
-    print("警告: tqdm库未安装，将使用简单进度显示")
-    # 简单的进度显示替代
-    class tqdm:
-        def __init__(self, total, desc="", unit="帧"):
-            self.total = total
-            self.desc = desc
-            self.unit = unit
-            self.n = 0
-            self.start_time = time.time()
-            print(f"{desc}: 0/{total} {unit} (0.0%)")
-        
-        def update(self, n=1):
-            self.n += n
-            percentage = (self.n / self.total) * 100
-            elapsed = time.time() - self.start_time
-            fps = self.n / elapsed if elapsed > 0 else 0
-            remaining = (self.total - self.n) / fps if fps > 0 else 0
-            print(f"\r{self.desc}: {self.n}/{self.total} {self.unit} ({percentage:.1f}%) | "
-                  f"已用: {elapsed:.1f}s | 剩余: {remaining:.1f}s | "
-                  f"速度: {fps:.1f}帧/s", end="")
-            
-        def __enter__(self):
-            return self
-            
-        def __exit__(self, *args):
-            print()
-            
-        def close(self):
-            pass
+import subprocess
+import ctypes
+
+# ==================== 可被外部覆盖的路径变量 ====================
+FFMPEG_PATH = "ffmpeg"   # 默认使用系统 PATH 中的 ffmpeg，GUI 可修改为打包内的路径
 
 # ==================== 用户可配置参数 ====================
 # FIT文件路径（设置为None则自动查找最新文件）
@@ -779,108 +750,26 @@ def generate_elevation_frames(interp_times, interp_elevations, width, height, el
     print(f"✅ 海拔帧生成完成: {frame_count}帧, 耗时: {elapsed:.2f}秒, 平均速度: {fps_actual:.1f}帧/秒")
     return frame_count
 
-def compile_video_with_progress(frame_dir, output_file, frame_count, width, height, fps, prefix="frame_"):
-    """将帧合成为视频（带进度显示）"""
-    print(f"\n[视频合成] 开始合成视频: {output_file}")
-    
-    if frame_count == 0:
-        print("❌ 没有帧可合成")
-        return False
-    
-    # 检查ffmpeg是否可用
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("❌ 未找到ffmpeg，请先安装ffmpeg")
-        return False
-    
-    # 构建ffmpeg命令
-    ffmpeg_cmd = [
-        "ffmpeg", "-y",
-        "-framerate", str(fps),
-        "-start_number", "0",
-        "-i", os.path.join(frame_dir, f"{prefix}%06d.png"),
-        "-vf", f"scale={width}:{height},setsar=1",
-        "-c:v", "prores_ks",
-        "-profile:v", "4444",
-        "-pix_fmt", "yuva444p10le",
-        "-frames:v", str(frame_count),
-        output_file
-    ]
-    
-    print(f"[视频合成] 命令: {' '.join(ffmpeg_cmd)}")
-    
-    try:
-        # 使用Popen启动进程，以便捕获输出
-        process = subprocess.Popen(
-            ffmpeg_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            bufsize=1
-        )
-        
-        # 显示进度
-        print(f"[视频合成] 正在合成视频，请稍候...")
-        start_time = time.time()
-        last_print_time = start_time
-        
-        # 读取输出并定时打印进度
-        for line in process.stdout:
-            current_time = time.time()
-            if current_time - last_print_time >= PRINT_INTERVAL:
-                elapsed = current_time - start_time
-                # 估计已编码帧数
-                estimated_frames = int(elapsed * fps)
-                if estimated_frames > frame_count:
-                    estimated_frames = frame_count
-                percentage = (estimated_frames / frame_count) * 100 if frame_count > 0 else 0
-                remaining_time = (frame_count - estimated_frames) / fps if fps > 0 else 0
-                print(f"[视频合成] 估计进度: {estimated_frames}/{frame_count}帧 ({percentage:.1f}%) | "
-                      f"已用: {elapsed:.1f}s | 剩余: {remaining_time:.1f}s")
-                last_print_time = current_time
-            
-            if "error" in line.lower():
-                print(f"\n[视频合成警告] {line.strip()}")
-        
-        # 等待进程完成
-        process.wait()
-        
-        if process.returncode == 0:
-            elapsed = time.time() - start_time
-            print(f"\n✅ 视频生成成功: {output_file}")
-            if os.path.exists(output_file):
-                file_size = os.path.getsize(output_file) / (1024 * 1024)
-                print(f"文件大小: {file_size:.2f} MB")
-                print(f"合成耗时: {elapsed:.2f}秒")
-            return True
-        else:
-            print(f"\n❌ ffmpeg执行失败，返回码: {process.returncode}")
-            return False
-            
-    except Exception as e:
-        print(f"\n❌ 视频合成失败: {e}")
-        traceback.print_exc()
-        return False
-
 def compile_video_simple(frame_dir, output_file, frame_count, width, height, fps, prefix="frame_"):
     """简单视频合成函数（不显示详细进度）"""
+    global FFMPEG_PATH   # 使用模块级全局变量，允许外部修改
+    
     print(f"\n[视频合成] 开始合成视频: {output_file}")
     
     if frame_count == 0:
         print("❌ 没有帧可合成")
         return False
     
-    # 检查ffmpeg是否可用
+    # 检查 ffmpeg 是否可用
     try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        subprocess.run([FFMPEG_PATH, "-version"], capture_output=True, check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print("❌ 未找到ffmpeg，请先安装ffmpeg")
+        print(f"❌ 未找到 ffmpeg（路径: {FFMPEG_PATH}），请先安装 ffmpeg 或检查路径")
         return False
     
-    # 构建ffmpeg命令
+    # 构建 ffmpeg 命令
     ffmpeg_cmd = [
-        "ffmpeg", "-y",
+        FFMPEG_PATH, "-y",
         "-framerate", str(fps),
         "-start_number", "0",
         "-i", os.path.join(frame_dir, f"{prefix}%06d.png"),
@@ -896,7 +785,14 @@ def compile_video_simple(frame_dir, output_file, frame_count, width, height, fps
     start_time = time.time()
     
     try:
-        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        # Windows 隐藏子进程控制台窗口的标志
+        CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+        result = subprocess.run(
+            ffmpeg_cmd,
+            capture_output=True,
+            text=True,
+            creationflags=CREATE_NO_WINDOW   # 关键：不让 ffmpeg 弹黑窗
+        )
         elapsed = time.time() - start_time
         
         if result.returncode == 0:
@@ -907,7 +803,7 @@ def compile_video_simple(frame_dir, output_file, frame_count, width, height, fps
                 print(f"合成耗时: {elapsed:.2f}秒")
             return True
         else:
-            print(f"❌ ffmpeg执行失败: {result.stderr[:500]}")
+            print(f"❌ ffmpeg 执行失败: {result.stderr[:500]}")
             return False
             
     except Exception as e:
@@ -915,7 +811,7 @@ def compile_video_simple(frame_dir, output_file, frame_count, width, height, fps
         return False
 
 def compile_all_videos(videos_to_compile, show_progress=True):
-    """合成所有视频，显示总体进度"""
+    """合成所有视频，显示总体进度（简单模式）"""
     if not videos_to_compile:
         print("没有需要合成的视频")
         return {}
@@ -930,10 +826,8 @@ def compile_all_videos(videos_to_compile, show_progress=True):
     for i, (video_type, frame_dir, output_file, frame_count, width, height, fps, prefix) in enumerate(videos_to_compile, 1):
         print(f"\n[{i}/{total_videos}] 合成{video_type}视频...")
         
-        if show_progress:
-            success = compile_video_with_progress(frame_dir, output_file, frame_count, width, height, fps, prefix)
-        else:
-            success = compile_video_simple(frame_dir, output_file, frame_count, width, height, fps, prefix)
+        # 始终使用简单合成，不显示中间进度
+        success = compile_video_simple(frame_dir, output_file, frame_count, width, height, fps, prefix)
         
         results[video_type] = {
             'success': success,
