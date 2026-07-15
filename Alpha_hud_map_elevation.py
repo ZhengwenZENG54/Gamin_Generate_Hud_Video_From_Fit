@@ -562,6 +562,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         # 关键修改：使用原始代码的图形创建方式
         fig, ax = plt.subplots(figsize=(WIDTH/100, HEIGHT/100), dpi=100)
         fig.patch.set_alpha(0)
+        ax.set_facecolor('none')  # 轴域背景透明
         # 设置轴位置，留出上下边距
         ax.set_position([0, 0.05, 1, 0.9])
         ax.axis('off')
@@ -591,7 +592,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                     fps_actual = 0
                 remaining = (hud_frame_count - processed) / fps_actual if fps_actual > 0 else 0
                 print(
-                    f"[HUD进度] {processed}/{hud_frame_count}帧 | "
+                    f"[Alpha_HUD] {processed}/{hud_frame_count}帧 | "
                     f"已用: {elapsed:.1f}s | "
                     f"剩余: {remaining:.1f}s | "
                     f"速度: {fps_actual:.1f}帧/s"
@@ -770,7 +771,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         plt.ioff()
         fig, ax = plt.subplots(figsize=(WIDTH/100, HEIGHT/100), dpi=100)
         fig.patch.set_alpha(0)  # 设置图形背景透明
-        
+        ax.set_facecolor('none')  # 轴域背景透明
         # 设置轴位置，使用整个图形区域
         ax.set_position([0, 0, 1, 1])
         ax.set_xlim(0, WIDTH)
@@ -843,7 +844,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                     fps_actual = 0
                 remaining = (map_frame_count - processed) / fps_actual if fps_actual > 0 else 0
                 print(
-                    f"[地图进度] {processed}/{map_frame_count}帧 | "
+                    f"[Alpha_地图] {processed}/{map_frame_count}帧 | "
                     f"已用: {elapsed:.1f}s | "
                     f"剩余: {remaining:.1f}s | "
                     f"速度: {fps_actual:.1f}帧/s"
@@ -947,7 +948,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         plt.ioff()
         fig, ax = plt.subplots(figsize=(ELEVATION_WIDTH/100, ELEVATION_HEIGHT/100), dpi=100)
         fig.patch.set_alpha(0)  # 设置图形背景透明
-        
+        ax.set_facecolor('none')  # 轴域背景透明
         # 设置轴位置，使用整个图形区域
         ax.set_position([0, 0, 1, 1])
         ax.set_xlim(0, ELEVATION_WIDTH)
@@ -1032,7 +1033,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                     fps_actual = 0
                 remaining = (elevation_frame_count - processed) / fps_actual if fps_actual > 0 else 0
                 print(
-                    f"[海拔进度] {processed}/{elevation_frame_count}帧 | "
+                    f"[Alpha_海拔] {processed}/{elevation_frame_count}帧 | "
                     f"已用: {elapsed:.1f}s | "
                     f"剩余: {remaining:.1f}s | "
                     f"速度: {fps_actual:.1f}帧/s"
@@ -1101,20 +1102,20 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
             "-framerate", str(fps),
             "-start_number", "0",
             "-i", input_pattern,
-            "-vf", vf_filter,
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "18",
-            "-pix_fmt", "yuv420p",
+            "-vf", f"{vf_filter},format=rgba",  # 确保输入为 RGBA
+            "-c:v", "prores_ks",
+            "-profile:v", "4444",
+            "-pix_fmt", "yuva444p10le",
             "-frames:v", str(frame_count),
             output_file
         ]
 
         print(f"[DEBUG] FFmpeg命令: {' '.join(cmd)}")
         ffmpeg_start = time.time()
+        alpha_ffmpeg_timeout = 3600*24
         try:
             CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600,creationflags=CREATE_NO_WINDOW)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=alpha_ffmpeg_timeout,creationflags=CREATE_NO_WINDOW)
             elapsed = time.time() - ffmpeg_start
             if result.returncode == 0:
                 print(f"[成功] 视频生成成功: {output_file}")
@@ -1125,7 +1126,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                 print(f"[FFmpeg stderr]: {result.stderr[:500]}")
                 return False
         except subprocess.TimeoutExpired:
-            print("[错误] FFmpeg超时（超过600秒）")
+            print(f"[错误] FFmpeg超时（超过{alpha_ffmpeg_timeout}秒）")
             return False
         except Exception as e:
             print(f"[错误] FFmpeg执行异常: {e}")
