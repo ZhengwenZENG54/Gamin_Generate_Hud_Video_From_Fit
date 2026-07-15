@@ -617,7 +617,7 @@ def generate_time_frames(lap_start, lap_end, width, height, time_font):
             processed = i + 1
             fps_actual = processed / elapsed if elapsed > 0 else 0
             remaining = (total_frames - processed) / fps_actual if fps_actual > 0 else 0
-            print(f"[时间进度] {processed}/{total_frames}帧 | "
+            print(f"[Beta_时间] {processed}/{total_frames}帧 | "
                   f"已用: {elapsed:.1f}s | 剩余: {remaining:.1f}s | "
                   f"速度: {fps_actual:.1f}帧/s")
             last_print_time = current_time
@@ -675,7 +675,7 @@ def generate_distance_frames(interp_times, interp_distances, width, height, dist
             processed = i + 1
             fps_actual = processed / elapsed if elapsed > 0 else 0
             remaining = (total_frames - processed) / fps_actual if fps_actual > 0 else 0
-            print(f"[距离进度] {processed}/{total_frames}帧 | "
+            print(f"[Beta_距离] {processed}/{total_frames}帧 | "
                   f"已用: {elapsed:.1f}s | 剩余: {remaining:.1f}s | "
                   f"速度: {fps_actual:.1f}帧/s")
             last_print_time = current_time
@@ -727,7 +727,7 @@ def generate_elevation_frames(interp_times, interp_elevations, width, height, el
             processed = i + 1
             fps_actual = processed / elapsed if elapsed > 0 else 0
             remaining = (total_frames - processed) / fps_actual if fps_actual > 0 else 0
-            print(f"[海拔进度] {processed}/{total_frames}帧 | "
+            print(f"[Beta_海拔] {processed}/{total_frames}帧 | "
                   f"已用: {elapsed:.1f}s | 剩余: {remaining:.1f}s | "
                   f"速度: {fps_actual:.1f}帧/s")
             last_print_time = current_time
