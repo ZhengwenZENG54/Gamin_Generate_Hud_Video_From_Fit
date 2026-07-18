@@ -32,7 +32,7 @@ def get_ffmpeg_path():
     """获取 ffmpeg 路径：打包后使用内部资源，开发时使用系统 PATH"""
     # 打包后
     if getattr(sys, 'frozen', False):
-        bundled = resource_path("ffmpeg.exe")
+        bundled = resource_path("resources/ffmpeg.exe")  # 注意路径包含 resources/
         if os.path.isfile(bundled):
             return bundled
     # 开发环境：使用系统 PATH 中的 ffmpeg（conda 环境自带）
@@ -45,15 +45,6 @@ def get_ffmpeg_path():
     if os.path.isfile(local_ffmpeg):
         return local_ffmpeg
     return None
-
-# ==================== 资源路径辅助函数 ====================
-def resource_path(relative_path):
-    """获取资源的绝对路径，兼容开发环境和 PyInstaller 打包后的 exe"""
-    try:
-        base_path = sys._MEIPASS
-    except AttributeError:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, relative_path)
 
 # ==================== 用户可修改的配置 ====================
 # 模块文件路径（使用 resource_path）
@@ -100,7 +91,7 @@ class StdoutRedirector(io.TextIOBase):
 class FitVideoGeneratorApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("FIT数据视频生成器V1.1.0")
+        self.title("FIT数据视频生成器V1.2.0")
         self.geometry("880x920")
         self.resizable(True, True)
 
