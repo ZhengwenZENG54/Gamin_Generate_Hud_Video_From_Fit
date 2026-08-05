@@ -39,7 +39,15 @@ OUTPUT_MOV_GAMMA = None
 
 # ==================== 核心函数 ====================
 
-def generate_gamma_metrics_video(fit_path, lap_start, lap_end, ftp=None, metrics_fps=None):
+def generate_gamma_metrics_video(
+    fit_path, 
+    lap_start, 
+    lap_end, 
+    selected_nums=None, 
+    covered_nums=None, 
+    ftp=None, 
+    metrics_fps=None
+):
     global OUTPUT_MOV_GAMMA
 
     if ftp is None:
@@ -56,7 +64,10 @@ def generate_gamma_metrics_video(fit_path, lap_start, lap_end, ftp=None, metrics
         OUTPUT_MOV_GAMMA = f"gamma_metrics_{timestamp}.mov"
 
     print("\n=== Gamma 训练指标视频配置 ===")
-    print(f"Lap时段: {lap_start.strftime('%H:%M:%S')} → {lap_end.strftime('%H:%M:%S')}")
+    if selected_nums and covered_nums:
+        print(f"选中 Lap: {', '.join(map(str, selected_nums))}")
+        print(f"覆盖 Lap 区间: {covered_nums[0]} → {covered_nums[-1]} ({len(covered_nums)} 个 Lap)")
+    print(f"时间范围: {lap_start.strftime('%H:%M:%S')} → {lap_end.strftime('%H:%M:%S')}")
     print(f"Lap时长: {duration:.1f}秒")
     print(f"帧率: {metrics_fps} Hz")
     print(f"预期帧数: {int(duration * metrics_fps) + 1}")
@@ -114,7 +125,7 @@ def load_and_filter(fit_path, start_abs_time, end_abs_time):
             speed.append(np.nan)
 
     if not offsets:
-        raise RuntimeError("指定 Lap 内无有效数据")
+        raise RuntimeError("指定时间范围内无有效数据")
 
     print(f"[DEBUG] 加载完成: {len(offsets)}条记录")
     valid_speeds = [s for s in speed if not np.isnan(s)]
@@ -286,7 +297,7 @@ def render_gamma_frames(metrics, duration, metrics_fps):
         ap_val = metrics['ap'][idx]
         ap_text = f"{ap_val:.0f}W" if not np.isnan(ap_val) else "--"
         np_val = metrics['np'][idx]
-        np_text = f"{np_val:.0f}W" if not np.isnan(np_val) else "Calc..."
+        np_text = f"{np_val:.0f}W" if not np.isnan(np_val) else "--"
 
         # Row 2
         if_val = metrics['if'][idx]
@@ -353,19 +364,36 @@ def select_laps(fit_path):
 
     if not laps:
         print("⚠️ 无有效 Lap")
-        return None, None
+        return None, None, None, None
 
+    # 打印所有 Lap 供选择
     for display_num, (idx, st, et) in enumerate(laps, start=1):
         print(f"[{display_num}] {st.strftime('%H:%M:%S')} → {et.strftime('%H:%M:%S')}")
 
-    choice = input("选择 Lap (q退出): ").strip().lower()
+    choice = input("选择 Lap (q退出，支持多选，逗号分隔，如1,3): ").strip().lower()
     if choice == "q":
-        return None, None
-    lap_no = int(choice)
-    if not (1 <= lap_no <= len(laps)):
-        raise ValueError(f"无效选择，请输入 1 ~ {len(laps)}")
-    chosen = laps[lap_no - 1]
-    return chosen[1], chosen[2]
+        return None, None, None, None
+
+    # 解析输入
+    try:
+        # 去重、排序、转成1-based序号
+        selected_nums = sorted({int(x.strip()) for x in choice.split(',')})
+    except ValueError:
+        print("❌ 输入无效，请输入数字并用逗号分隔（如1,3）")
+        return select_laps(fit_path)  # 递归重新输入
+
+    # 校验序号范围
+    if not (1 <= min(selected_nums) <= max(selected_nums) <= len(laps)):
+        print(f"❌ 无效选择，请输入 1 ~ {len(laps)} 之间的数字")
+        return select_laps(fit_path)
+
+    # 转成0-based索引，取最小/最大覆盖范围
+    selected_indices = [num - 1 for num in selected_nums]
+    min_idx = min(selected_indices)
+    max_idx = max(selected_indices)
+    covered_nums = list(range(min_idx + 1, max_idx + 2))  # 转回1-based覆盖范围
+
+    return laps[min_idx][1], laps[max_idx][2], selected_nums, covered_nums
 
 
 def main():
@@ -381,18 +409,20 @@ def main():
         return
     file_no = int(choice)
     if not (1 <= file_no <= len(fits)):
-        print("❌ 无效")
+        print("❌ 无效选择")
         return
     fit_path = fits[file_no - 1]
 
-    lap_start, lap_end = select_laps(fit_path)
+    lap_start, lap_end, selected_nums, covered_nums = select_laps(fit_path)
     if lap_start is None:
         return
 
     ftp = int(input("FTP (回车默认250): ") or 250)
     fps = int(input("帧率 (回车默认1): ") or 1)
 
-    generate_gamma_metrics_video(fit_path, lap_start, lap_end, ftp, fps)
+    generate_gamma_metrics_video(
+        fit_path, lap_start, lap_end, selected_nums, covered_nums, ftp, fps
+    )
 
 
 if __name__ == "__main__":
