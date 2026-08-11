@@ -13,7 +13,7 @@ import sys
 import subprocess
 
 # ============================================================
-# === gamma: training metrics video (AP/NP/IF/VI/TSS/HR/Speed)
+# === gamma: training metrics video (Strava-like NP/AP/IF/VI/TSS)
 # ============================================================
 
 # ==================== 字体初始化 ====================
@@ -25,10 +25,10 @@ METRICS_FPS = 1
 METRICS_FTP = 250
 METRICS_WIDTH, METRICS_HEIGHT = 480, 270
 METRICS_FONT_SIZE = 22
-NP_WINDOW_SECONDS = 30
+
+# Strava-like NP：25s EMA（核心参数）
 EMA_SPAN = 25
-NP_ZERO_THRESHOLD = 10
-NP_MIN_VALID_SECONDS = 30
+
 IF_MIN_VALID_SECONDS = 30
 SPEED_MIN_KMH = 3.0
 PRINT_INTERVAL = 5
@@ -40,12 +40,12 @@ OUTPUT_MOV_GAMMA = None
 # ==================== 核心函数 ====================
 
 def generate_gamma_metrics_video(
-    fit_path, 
-    lap_start, 
-    lap_end, 
-    selected_nums=None, 
-    covered_nums=None, 
-    ftp=None, 
+    fit_path,
+    lap_start,
+    lap_end,
+    selected_nums=None,
+    covered_nums=None,
+    ftp=None,
     metrics_fps=None
 ):
     global OUTPUT_MOV_GAMMA
@@ -80,10 +80,11 @@ def generate_gamma_metrics_video(
     print("[步骤2/4] 计算指标 (AP/NP/HR/TSS/IF/VI/Speed)...")
     metrics = interpolate_metrics(raw, duration, metrics_fps, ftp)
 
-    print(f"[DEBUG] lap_np = {metrics.get('lap_np', 'N/A'):.0f}")
-    print(f"[DEBUG] TSS[-1]={metrics['tss'][-1]:.1f}")
-    print(f"[DEBUG] AP[-1]={metrics['ap'][-1]:.0f}, HR[-1]={metrics['hr'][-1]:.0f}")
-    print(f"[DEBUG] AvgSpeed[-1]={metrics['avg_speed'][-1]:.1f} km/h")
+    print(f"[DEBUG] lap_np (Strava-like) = {metrics.get('lap_np', 'N/A'):.1f} W")
+    print(f"[DEBUG] TSS[-1] = {metrics['tss'][-1]:.1f}")
+    print(f"[DEBUG] AP[-1] = {metrics['ap'][-1]:.0f} W")
+    print(f"[DEBUG] HR[-1] = {metrics['hr'][-1]:.0f} bpm")
+    print(f"[DEBUG] AvgSpeed[-1] = {metrics['avg_speed'][-1]:.1f} km/h")
 
     print("[步骤3/4] 渲染帧...")
     frame_count = render_gamma_frames(metrics, duration, metrics_fps)
@@ -93,7 +94,9 @@ def generate_gamma_metrics_video(
         return {}
 
     print("[步骤4/4] 合成视频...")
-    success = assemble_gamma_mov(OUTPUT_DIR_GAMMA, OUTPUT_MOV_GAMMA, frame_count, metrics_fps)
+    success = assemble_gamma_mov(
+        OUTPUT_DIR_GAMMA, OUTPUT_MOV_GAMMA, frame_count, metrics_fps
+    )
 
     if os.path.exists(OUTPUT_DIR_GAMMA):
         shutil.rmtree(OUTPUT_DIR_GAMMA)
@@ -115,9 +118,11 @@ def load_and_filter(fit_path, start_abs_time, end_abs_time):
         ts = vals.get('timestamp')
         if ts is None or not (start_abs_time <= ts <= end_abs_time):
             continue
+
         offsets.append((ts - start_abs_time).total_seconds())
         power.append(vals.get('power', 0) or 0)
         hr.append(vals.get('heart_rate', np.nan))
+
         s = vals.get('enhanced_speed', vals.get('speed', np.nan))
         if s is not None and not np.isnan(float(s)):
             speed.append(float(s) * 3.6)
@@ -127,7 +132,7 @@ def load_and_filter(fit_path, start_abs_time, end_abs_time):
     if not offsets:
         raise RuntimeError("指定时间范围内无有效数据")
 
-    print(f"[DEBUG] 加载完成: {len(offsets)}条记录")
+    print(f"[DEBUG] 加载完成: {len(offsets)} 条记录")
     valid_speeds = [s for s in speed if not np.isnan(s)]
     if valid_speeds:
         print(f"[DEBUG] 速度范围: {min(valid_speeds):.1f} → {max(valid_speeds):.1f} km/h")
@@ -146,24 +151,32 @@ def safe_interp1d(x, y, x_new):
     sort_idx = np.argsort(x)
     x = x[sort_idx]
     y = y[sort_idx]
-    interp_func = interp1d(x, y, kind='linear', bounds_error=False, fill_value=np.nan)
+    interp_func = interp1d(
+        x, y, kind='linear', bounds_error=False, fill_value=np.nan
+    )
     return interp_func(x_new)
 
 
-def ema_smooth(series, span):
-    return series.ewm(span=span, adjust=False, min_periods=1).mean()
+def calculate_np_cum(power_series, ema_span=EMA_SPAN):
+    """
+    Strava-like Weighted Average Power
+    - 25s EMA
+    - 不过滤 0W
+    - 不人为置 NaN
+    """
+    power_series = pd.Series(power_series).fillna(0)
 
+    ema = power_series.ewm(
+        span=ema_span,
+        adjust=False,
+        min_periods=1
+    ).mean()
 
-def calculate_np_cum(power_series, ema_span=EMA_SPAN, zero_threshold=NP_ZERO_THRESHOLD):
-    valid_mask = power_series >= zero_threshold
-    filtered = power_series.where(valid_mask, other=np.nan)
-    ema = ema_smooth(filtered, span=ema_span)
     ema_4th = ema ** 4
     cum_mean_4th = ema_4th.expanding(min_periods=1).mean()
     np_cum = np.power(cum_mean_4th, 0.25)
-    valid_count = valid_mask.cumsum()
-    np_cum = np_cum.where(valid_count >= NP_MIN_VALID_SECONDS, other=np.nan)
-    lap_np = np_cum.mean()
+
+    lap_np = np_cum.iloc[-1]
     return np_cum, lap_np
 
 
@@ -174,6 +187,7 @@ def interpolate_metrics(data, duration_sec, metrics_fps, ftp):
     valid_power_mask = ~np.isnan(data['power'])
     if not np.any(valid_power_mask):
         raise ValueError("无有效功率数据")
+
     power_1hz = safe_interp1d(
         offsets[valid_power_mask],
         data['power'][valid_power_mask],
@@ -184,7 +198,7 @@ def interpolate_metrics(data, duration_sec, metrics_fps, ftp):
     # AP
     ap_series_1hz = power_series_1hz.expanding(min_periods=1).mean()
 
-    # NP / Lap NP
+    # NP（Strava-like）
     np_cum_1hz, lap_np = calculate_np_cum(power_series_1hz)
     if np.isnan(lap_np) or lap_np <= 0:
         lap_np = ap_series_1hz.iloc[-1]
@@ -194,7 +208,9 @@ def interpolate_metrics(data, duration_sec, metrics_fps, ftp):
     if_series = (np_cum_1hz / ftp).where(np_cum_1hz.notna(), other=np.nan)
     ap_safe = ap_series_1hz.replace(0, np.nan)
     vi_series = (np_cum_1hz / ap_safe).where(
-        (np_cum_1hz.notna()) & (ap_safe.notna()), other=np.nan)
+        (np_cum_1hz.notna()) & (ap_safe.notna()), other=np.nan
+    )
+
     valid_count_for_if = np_cum_1hz.notna().cumsum()
     if_mask = valid_count_for_if >= IF_MIN_VALID_SECONDS
     if_series = if_series.where(if_mask, other=np.nan)
@@ -205,7 +221,8 @@ def interpolate_metrics(data, duration_sec, metrics_fps, ftp):
     hr_cum = pd.Series(np.full_like(high_res_time_1hz, np.nan))
     if np.any(valid_hr_mask):
         hr_1hz = safe_interp1d(
-            offsets[valid_hr_mask], data['hr'][valid_hr_mask], high_res_time_1hz)
+            offsets[valid_hr_mask], data['hr'][valid_hr_mask], high_res_time_1hz
+        )
         hr_cum = pd.Series(hr_1hz).expanding(min_periods=1).mean()
 
     # Avg Speed
@@ -213,16 +230,20 @@ def interpolate_metrics(data, duration_sec, metrics_fps, ftp):
     avg_speed_1hz = pd.Series(np.full_like(high_res_time_1hz, np.nan))
     if np.any(valid_speed_mask):
         speed_1hz = safe_interp1d(
-            offsets[valid_speed_mask], data['speed'][valid_speed_mask], high_res_time_1hz)
+            offsets[valid_speed_mask],
+            data['speed'][valid_speed_mask],
+            high_res_time_1hz
+        )
         speed_series_1hz = pd.Series(speed_1hz)
         speed_valid = speed_series_1hz.where(speed_series_1hz >= SPEED_MIN_KMH)
         avg_speed_1hz = speed_valid.expanding(min_periods=1).mean()
 
-    # TSS 微分
+    # TSS（微分累计）
     tss_vals = np.zeros_like(high_res_time_1hz, dtype=float)
     if ftp > 0 and not np.all(np.isnan(np_cum_1hz)):
         np_safe = np_cum_1hz.fillna(0)
-        tss_rate = (np_safe / ftp) ** 2 * (100.0 / 3600.0)
+        dt_hours = 1.0 / 3600.0
+        tss_rate = (np_safe / ftp) ** 2 * dt_hours * 100.0
         tss_vals = np.cumsum(tss_rate.values)
         tss_vals[np_cum_1hz.isna()] = 0
 
@@ -232,8 +253,10 @@ def interpolate_metrics(data, duration_sec, metrics_fps, ftp):
     def interp_to_video(values):
         if np.all(np.isnan(values)):
             return np.full_like(video_time, np.nan)
-        f = interp1d(high_res_time_1hz, values, kind='linear',
-                     bounds_error=False, fill_value=np.nan)
+        f = interp1d(
+            high_res_time_1hz, values,
+            kind='linear', bounds_error=False, fill_value=np.nan
+        )
         return f(video_time)
 
     return {
@@ -250,7 +273,7 @@ def interpolate_metrics(data, duration_sec, metrics_fps, ftp):
     }
 
 
-# ==================== 渲染（单 bbox · 三排 HUD · 全英文）====================
+# ==================== 渲染（单 bbox · 三排 HUD） ====================
 
 def render_gamma_frames(metrics, duration, metrics_fps):
     os.makedirs(OUTPUT_DIR_GAMMA, exist_ok=True)
@@ -259,7 +282,9 @@ def render_gamma_frames(metrics, duration, metrics_fps):
             os.remove(os.path.join(OUTPUT_DIR_GAMMA, f))
 
     plt.ioff()
-    fig, ax = plt.subplots(figsize=(METRICS_WIDTH/100, METRICS_HEIGHT/100), dpi=100)
+    fig, ax = plt.subplots(
+        figsize=(METRICS_WIDTH / 100, METRICS_HEIGHT / 100), dpi=100
+    )
     fig.patch.set_alpha(0)
     ax.set_facecolor('none')
     ax.set_position([0, 0.05, 1, 0.9])
@@ -287,9 +312,11 @@ def render_gamma_frames(metrics, duration, metrics_fps):
             processed = idx + 1
             fps_actual = processed / elapsed if elapsed > 0 else 0
             remaining = (num_frames - processed) / fps_actual if fps_actual > 0 else 0
-            print(f"[Gamma_Metrics] {processed}/{num_frames}帧 | "
-                  f"已用: {elapsed:.1f}s | 剩余: {remaining:.1f}s | "
-                  f"速度: {fps_actual:.1f}帧/s")
+            print(
+                f"[Gamma_Metrics] {processed}/{num_frames}帧 | "
+                f"已用: {elapsed:.1f}s | 剩余: {remaining:.1f}s | "
+                f"速度: {fps_actual:.1f}帧/s"
+            )
             last_print_time = current_time
 
         # Row 1
@@ -315,8 +342,8 @@ def render_gamma_frames(metrics, duration, metrics_fps):
 
         display_text = (
             f"FTP:{ftp_text}  AP:{ap_text}  NP:{np_text}\n"
-            f"IF:{if_text}  VI:{vi_text}  TSS:{tss_text}\n"
-            f"Avg HR:{hr_text}  Avg SPD:{spd_text}km/h"
+            f"IF:{if_text}    VI:{vi_text}  TSS:{tss_text}\n"
+            f"AvgHR:{hr_text} AvgSPD:{spd_text}km/h"
         )
 
         text_obj.set_text(display_text)
@@ -348,7 +375,10 @@ def find_fit_files():
     files = []
     for p in paths:
         if os.path.exists(p):
-            files.extend([os.path.join(p, f) for f in os.listdir(p) if f.lower().endswith(".fit")])
+            files.extend(
+                [os.path.join(p, f) for f in os.listdir(p)
+                 if f.lower().endswith(".fit")]
+            )
     return sorted(set(files))
 
 
@@ -366,7 +396,6 @@ def select_laps(fit_path):
         print("⚠️ 无有效 Lap")
         return None, None, None, None
 
-    # 打印所有 Lap 供选择
     for display_num, (idx, st, et) in enumerate(laps, start=1):
         print(f"[{display_num}] {st.strftime('%H:%M:%S')} → {et.strftime('%H:%M:%S')}")
 
@@ -374,24 +403,20 @@ def select_laps(fit_path):
     if choice == "q":
         return None, None, None, None
 
-    # 解析输入
     try:
-        # 去重、排序、转成1-based序号
         selected_nums = sorted({int(x.strip()) for x in choice.split(',')})
     except ValueError:
         print("❌ 输入无效，请输入数字并用逗号分隔（如1,3）")
-        return select_laps(fit_path)  # 递归重新输入
+        return select_laps(fit_path)
 
-    # 校验序号范围
     if not (1 <= min(selected_nums) <= max(selected_nums) <= len(laps)):
         print(f"❌ 无效选择，请输入 1 ~ {len(laps)} 之间的数字")
         return select_laps(fit_path)
 
-    # 转成0-based索引，取最小/最大覆盖范围
     selected_indices = [num - 1 for num in selected_nums]
     min_idx = min(selected_indices)
     max_idx = max(selected_indices)
-    covered_nums = list(range(min_idx + 1, max_idx + 2))  # 转回1-based覆盖范围
+    covered_nums = list(range(min_idx + 1, max_idx + 2))
 
     return laps[min_idx][1], laps[max_idx][2], selected_nums, covered_nums
 
@@ -407,6 +432,7 @@ def main():
     choice = input("选择文件 (q退出): ").strip().lower()
     if choice == "q":
         return
+
     file_no = int(choice)
     if not (1 <= file_no <= len(fits)):
         print("❌ 无效选择")
@@ -421,7 +447,8 @@ def main():
     fps = int(input("帧率 (回车默认1): ") or 1)
 
     generate_gamma_metrics_video(
-        fit_path, lap_start, lap_end, selected_nums, covered_nums, ftp, fps
+        fit_path, lap_start, lap_end,
+        selected_nums, covered_nums, ftp, fps
     )
 
 
