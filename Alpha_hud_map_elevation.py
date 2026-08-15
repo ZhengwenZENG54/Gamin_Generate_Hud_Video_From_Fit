@@ -7,16 +7,13 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import shutil
 import math
 import threading
 import cv2
-from scipy.spatial import ConvexHull
-from matplotlib.patches import Circle
 import subprocess
-import subprocess
-import ctypes, sys
+import sys
 
 # ==================== 可被外部覆盖的路径变量 ====================
 FFMPEG_PATH = "ffmpeg"   # 默认使用系统 PATH 中的 ffmpeg，GUI 可修改为打包内的路径
@@ -28,35 +25,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
                                hud_fps=30,
                                map_fps=5,
                                elevation_fps=5):
-    """
-    从FIT文件生成HUD、地图和海拔叠加视频（海拔图基于距离）
     
-    参数:
-    ----------
-    fit_path : str
-        FIT文件路径
-    lap_start : datetime
-        圈开始时间（UTC时区）
-    lap_end : datetime
-        圈结束时间（UTC时区）
-    generate_hud : bool, 默认True
-        是否生成HUD视频
-    generate_map : bool, 默认True
-        是否生成地图视频
-    generate_elevation : bool, 默认True
-        是否生成海拔视频
-    hud_fps : int, 默认5
-        HUD视频的帧率
-    map_fps : int, 5
-        地图视频的帧率
-    elevation_fps : int, 默认5
-        海拔视频的帧率
-        
-    返回值:
-    ----------
-    dict
-        包含生成视频文件路径的字典
-    """
     # 声明全局变量，以便外部（如GUI）可以修改输出路径
     global OUTPUT_DIR_HUD, OUTPUT_DIR_MAP, OUTPUT_DIR_ELEVATION, \
            OUTPUT_MOV_HUD, OUTPUT_MOV_MAP, OUTPUT_MOV_ELEVATION
@@ -87,7 +56,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     # 视频参数 - 分别设置FPS
     width, height = 480, 270
     font_size = 25
-    print_interval = 1
+    print_interval = 10
     speed_threshold = 3.0
     
     # 控制参数
@@ -104,9 +73,6 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     map_background_color = (0.0, 0.0, 0.0, 0.0)  # RGBA: 完全透明
     map_circle_bg_color = (0.2, 0.2, 0.2, 0.6)  # RGBA: 灰色半透明背景
     map_circle_padding_percent = 10  # 圆形背景的内边距百分比
-    map_show_grid = False  # 禁用网格
-    map_grid_color = (1.0, 1.0, 1.0, 0.1)  # RGBA: 白色半透明
-    map_grid_spacing = 0.2
     map_margin = 0.1  # 边距比例(0-0.5)
     
     # 海拔样式参数
@@ -115,10 +81,6 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
     elevation_background_color = (1.0, 1.0, 1.0, 0.2)  # RGBA: 白色半透明
     elevation_marker_color = (1.0, 0.0, 0.0, 1.0)  # RGBA: 红色
     elevation_marker_size = 12 #10
-    elevation_show_grid = False  # 禁用网格
-    elevation_grid_color = (0.5, 0.5, 0.5, 0.3)  # RGBA: 灰色半透明
-    elevation_grid_spacing_x = 0.1  # X轴网格间距（时间比例）
-    elevation_grid_spacing_y = 50  # Y轴网格间距（米）
     elevation_margin = 0.1  # 边距比例(0-0.5)
     elevation_aspect_ratio = 8  # 长宽比 宽度:高度
     
@@ -156,7 +118,6 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         print(f"地图标记类型: {map_marker_type}")
         print(f"地图垂直翻转: {'是' if flip_map_vertical else '否'}")
         print(f"地图圆形背景内边距: {map_circle_padding_percent}%")
-        print(f"海拔网格显示: {'启用' if elevation_show_grid else '禁用'}")
         print("==================\n")
     
     def validate_frames(frame_count, output_dir, frame_prefix="frame_"):
@@ -449,22 +410,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         return pixel_x, pixel_y, min_lat, max_lat, min_lon, max_lon
     
     def normalize_elevation_by_distance(alts, dists, margin=elevation_margin):
-        """
-        基于距离归一化海拔数据（替换原来的时间归一化）
         
-        参数:
-        ----------
-        alts : array
-            海拔数据数组（可能包含NaN）
-        dists : array
-            距离数据数组（可能包含NaN）
-        margin : float
-            边距比例
-                
-        返回值:
-        ----------
-        pixel_x, pixel_y, min_alt, max_alt, min_dist, max_dist
-        """
         # 过滤有效数据
         valid_mask = ~(np.isnan(alts) | np.isnan(dists))
         valid_alts = alts[valid_mask]
@@ -653,22 +599,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         return angle_rad
     
     def create_perfect_circular_background(pixel_x, pixel_y, width, height, padding_percent=map_circle_padding_percent):
-        """
-        创建完美的圆形背景，确保轨迹完全在圆形内部
-        
-        参数:
-        ----------
-        pixel_x, pixel_y : list
-            轨迹像素坐标
-        width, height : int
-            画布尺寸
-        padding_percent : float
-            内边距百分比
-            
-        返回值:
-        ----------
-        (circle_center_x, circle_center_y, circle_radius, scale_factor, transform_points)
-        """
+
         # 过滤NaN值
         valid_points = [(x, y) for x, y in zip(pixel_x, pixel_y) if not (np.isnan(x) or np.isnan(y))]
         
@@ -781,16 +712,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         
         # 设置背景色
         ax.set_facecolor(map_background_color)
-        
-        # 绘制网格（可选）
-        if map_show_grid:
-            grid_step_x = WIDTH * map_grid_spacing
-            grid_step_y = HEIGHT * map_grid_spacing
-            for x in np.arange(0, WIDTH + grid_step_x, grid_step_x):
-                ax.axvline(x, color=map_grid_color, linewidth=0.5, alpha=0.5)
-            for y in np.arange(0, HEIGHT + grid_step_y, grid_step_y):
-                ax.axhline(y, color=map_grid_color, linewidth=0.5, alpha=0.5)
-        
+
         # 绘制圆形背景
         circle = plt.Circle(
             (circle_center_x, circle_center_y), 
@@ -919,20 +841,7 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         return map_frames_rendered
     
     def render_elevation_frames(data_intp_elevation, pixel_x_elev, pixel_y_elev, dists, duration_sec):
-        """
-        基于距离渲染海拔帧（优化版，O(N)时间复杂度）
-        
-        参数:
-        ----------
-        data_intp_elevation : dict
-            插值后的数据
-        pixel_x_elev, pixel_y_elev : list
-            海拔曲线的像素坐标
-        dists : array
-            插值后的距离数据
-        duration_sec : float
-            总时长（秒）
-        """
+
         if not generate_elevation:
             return 0
             
@@ -958,30 +867,6 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         
         # 设置背景色
         ax.set_facecolor(map_background_color)  # 使用与地图相同的透明背景
-        
-        # 绘制网格（可选）- 已禁用
-        if elevation_show_grid:
-            # X轴网格（时间）
-            grid_step_x = ELEVATION_WIDTH * elevation_grid_spacing_x
-            for x in np.arange(0, ELEVATION_WIDTH + grid_step_x, grid_step_x):
-                ax.axvline(x, color=elevation_grid_color, linewidth=0.5, alpha=0.5)
-            
-            # Y轴网格（海拔）
-            # 需要先获取海拔范围来计算实际网格
-            valid_pixel_y = [y for y in pixel_y_elev if not np.isnan(y)]
-            if valid_pixel_y:
-                min_y = min(valid_pixel_y)
-                max_y = max(valid_pixel_y)
-                # 将海拔网格间距转换为像素
-                y_range = max_y - min_y
-                if y_range > 0:
-                    # 计算每个海拔单位的像素数
-                    alt_range_px = ELEVATION_HEIGHT
-                    grid_step_y_px = (elevation_grid_spacing_y / y_range) * alt_range_px
-                    
-                    if grid_step_y_px > 0:
-                        for y in np.arange(0, ELEVATION_HEIGHT + grid_step_y_px, grid_step_y_px):
-                            ax.axhline(y, color=elevation_grid_color, linewidth=0.5, alpha=0.5)
         
         # 绘制完整海拔曲线（浅色背景）
         valid_coords = [(x, y) for x, y in zip(pixel_x_elev, pixel_y_elev) if not (np.isnan(x) or np.isnan(y))]
@@ -1377,9 +1262,6 @@ def generate_hud_map_elevation_video(fit_path, lap_start, lap_end,
         result['elevation_video'] = OUTPUT_MOV_ELEVATION
     
     return result
-
-# 为了向后兼容，保留原函数名
-generate_hud_video = generate_hud_map_elevation_video
 
 if __name__ == "__main__":
     # 测试数据

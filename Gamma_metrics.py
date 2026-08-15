@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from fitparse import FitFile
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # 必须在 import pyplot 之前设置，确保无显示环境下正常工作
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import time
@@ -20,7 +20,7 @@ import subprocess
 plt.rcParams["font.family"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
 
-# ==================== 可配置参数 ====================
+# ==================== 可配置参数（call 代码会通过模块对象覆盖这些） ====================
 METRICS_FPS = 1
 METRICS_FTP = 250
 METRICS_WIDTH, METRICS_HEIGHT = 480, 270
@@ -33,7 +33,10 @@ IF_MIN_VALID_SECONDS = 30
 SPEED_MIN_KMH = 3.0
 PRINT_INTERVAL = 5
 
+# call 代码会覆盖这个路径（指向打包内或系统 PATH 的 ffmpeg）
 FFMPEG_PATH = "ffmpeg"
+
+# call 代码会覆盖这些路径，确保输出受控于 GUI 的输出目录
 OUTPUT_DIR_GAMMA = "frames_gamma"
 OUTPUT_MOV_GAMMA = None
 
@@ -48,6 +51,30 @@ def generate_gamma_metrics_video(
     ftp=None,
     metrics_fps=None
 ):
+    """
+    从 FIT 文件生成训练指标视频（AP/NP/HR/TSS/IF/VI/Speed）
+    
+    参数:
+    ----------
+    fit_path : str
+        FIT 文件路径
+    lap_start : datetime
+        起始时间（多个 Lap 合并后的最早时间）
+    lap_end : datetime
+        结束时间（多个 Lap 合并后的最晚时间）
+    selected_nums : list of int, 可选
+        用户选中的 Lap 编号（1-based），用于日志显示
+    covered_nums : list of int, 可选
+        覆盖的 Lap 编号区间，用于日志显示
+    ftp : int, 可选
+        功能阈值功率，None 则使用模块级 METRICS_FTP
+    metrics_fps : int, 可选
+        视频帧率，None 则使用模块级 METRICS_FPS
+        
+    返回值:
+    ----------
+    dict : {'gamma_metrics_video': 输出文件路径} 或 {}
+    """
     global OUTPUT_MOV_GAMMA
 
     if ftp is None:
@@ -59,6 +86,7 @@ def generate_gamma_metrics_video(
     if duration <= 0:
         raise ValueError(f"无效的 Lap 时长：{duration}秒")
 
+    # 如果 call 代码没有显式设置 OUTPUT_MOV_GAMMA，则使用默认命名
     if OUTPUT_MOV_GAMMA is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         OUTPUT_MOV_GAMMA = f"gamma_metrics_{timestamp}.mov"
@@ -72,6 +100,8 @@ def generate_gamma_metrics_video(
     print(f"帧率: {metrics_fps} Hz")
     print(f"预期帧数: {int(duration * metrics_fps) + 1}")
     print(f"FTP: {ftp} W")
+    print(f"输出视频: {OUTPUT_MOV_GAMMA}")
+    print(f"FFMPEG_PATH: {FFMPEG_PATH}")
     print("===============================\n")
 
     print("[步骤1/4] 加载 FIT 数据...")
@@ -80,7 +110,7 @@ def generate_gamma_metrics_video(
     print("[步骤2/4] 计算指标 (AP/NP/HR/TSS/IF/VI/Speed)...")
     metrics = interpolate_metrics(raw, duration, metrics_fps, ftp)
 
-    print(f"[DEBUG] lap_np (Strava-like) = {metrics.get('lap_np', 'N/A'):.1f} W")
+    print(f"[DEBUG] lap_np (Strava-like) = {metrics.get('lap_np', float('nan')):.1f} W")
     print(f"[DEBUG] TSS[-1] = {metrics['tss'][-1]:.1f}")
     print(f"[DEBUG] AP[-1] = {metrics['ap'][-1]:.0f} W")
     print(f"[DEBUG] HR[-1] = {metrics['hr'][-1]:.0f} bpm")
@@ -98,6 +128,7 @@ def generate_gamma_metrics_video(
         OUTPUT_DIR_GAMMA, OUTPUT_MOV_GAMMA, frame_count, metrics_fps
     )
 
+    # 清理临时帧目录
     if os.path.exists(OUTPUT_DIR_GAMMA):
         shutil.rmtree(OUTPUT_DIR_GAMMA)
 
@@ -356,19 +387,32 @@ def render_gamma_frames(metrics, duration, metrics_fps):
 
 
 def assemble_gamma_mov(frame_dir, output_file, frame_count, fps):
+    """
+    使用 ffmpeg 合成 ProRes 4444 透明视频
+    注意：-profile:v 4 是 ffmpeg 对 ProRes 4444 的标准写法
+    -vendor apl0 确保 QuickTime/Final Cut 兼容
+    """
     cmd = [
         FFMPEG_PATH, "-y", "-framerate", str(fps), "-start_number", "0",
         "-i", os.path.join(frame_dir, "frame_%06d.png"),
         "-vf", f"scale={METRICS_WIDTH}:{METRICS_HEIGHT},setsar=1",
-        "-c:v", "prores_ks", "-profile:v", "4444",
-        "-pix_fmt", "yuva444p10le", "-frames:v", str(frame_count), output_file
+        "-c:v", "prores_ks",
+        "-profile:v", "4",               # ProRes 4444 标准写法
+        "-vendor", "apl0",               # QuickTime 兼容标识
+        "-pix_fmt", "yuva444p10le",      # 10bit YUV + Alpha 通道
+        "-frames:v", str(frame_count),
+        output_file
     ]
+
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
-    subprocess.run(cmd, creationflags=CREATE_NO_WINDOW)
+    result = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+    if result.returncode != 0:
+        print(f"❌ ffmpeg 合成失败: {result.stderr[:500]}")
+        return False
     return True
 
 
-# ==================== CLI ====================
+# ==================== CLI（独立运行时的交互入口，被 import 时不执行） ====================
 
 def find_fit_files():
     paths = [".", "./data", "./fit", "./activities"]

@@ -76,7 +76,7 @@ GENERATE_ELEVATION_VIDEO = True
 BATCH_SIZE = 100  # 批处理大小，每生成多少帧保存一次进度
 
 # 进度打印间隔（秒）
-PRINT_INTERVAL = 1.0
+PRINT_INTERVAL = 5.0
 # =====================================================
 
 def find_latest_fit_file():

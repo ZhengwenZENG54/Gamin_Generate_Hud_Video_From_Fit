@@ -14,10 +14,10 @@ import traceback
 from PIL import Image, ImageTk
 import scipy.special
 import scipy.interpolate
-import PIL.ImageDraw      
-import PIL.ImageFont      
+import PIL.ImageDraw
+import PIL.ImageFont
 import matplotlib
-matplotlib.use('Agg')            
+matplotlib.use('Agg')
 
 # ==================== 资源路径辅助函数 ====================
 def resource_path(relative_path):
@@ -30,31 +30,27 @@ def resource_path(relative_path):
 
 def get_ffmpeg_path():
     """获取 ffmpeg 路径：打包后使用内部资源，开发时使用系统 PATH"""
-    # 打包后
     if getattr(sys, 'frozen', False):
-        bundled = resource_path("resources/ffmpeg.exe")  # 注意路径包含 resources/
+        bundled = resource_path("resources/ffmpeg.exe")
         if os.path.isfile(bundled):
             return bundled
-    # 开发环境：使用系统 PATH 中的 ffmpeg（conda 环境自带）
     import shutil
     system_ffmpeg = shutil.which("ffmpeg")
     if system_ffmpeg:
         return system_ffmpeg
-    # 最后尝试项目根目录下的 ffmpeg.exe（兼容旧版）
     local_ffmpeg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg.exe")
     if os.path.isfile(local_ffmpeg):
         return local_ffmpeg
     return None
 
 # ==================== 用户可修改的配置 ====================
-# 模块文件路径（使用 resource_path）
 MODULE_PATH_ALPHA = resource_path("Alpha_hud_map_elevation.py")
 MODULE_PATH_BETA  = resource_path("Beta_time_distance_elevation.py")
+MODULE_PATH_GAMMA = resource_path("Gamma_metrics.py")
 
-# 资源文件路径（放在 resources 子目录下）
 LOGO_PATH1 = resource_path("resources/2025单车行logo_Tr.png")
 LOGO_PATH2 = resource_path("resources/ZhengwenZENG.png")
-FFMPEG_PATH = resource_path("resources/ffmpeg.exe")  # 仅用于打包，开发时不用
+FFMPEG_PATH = resource_path("resources/ffmpeg.exe")
 SDL3_PATH = resource_path("resources/SDL3.dll")
 TCL_DIR = resource_path("resources/tcl")
 
@@ -65,6 +61,8 @@ ALPHA_ELEVATION_FPS = 5
 BETA_TIME_FPS = 1
 BETA_DISTANCE_FPS = 5
 BETA_ELEVATION_FPS = 5
+GAMMA_METRICS_FPS = 1
+GAMMA_FTP = 250
 # =========================================================
 
 def load_module_from_path(module_name, file_path):
@@ -91,8 +89,8 @@ class StdoutRedirector(io.TextIOBase):
 class FitVideoGeneratorApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("FIT数据视频生成器V1.2.0")
-        self.geometry("880x920")
+        self.title("FIT数据视频生成器V2.0.0")
+        self.geometry("880x820")
         self.resizable(True, True)
 
         # 数据存储
@@ -117,30 +115,21 @@ class FitVideoGeneratorApp(tk.Tk):
         image_frame = ttk.LabelFrame(self.main_frame, text="赞助商标识", padding=5)
         image_frame.pack(fill=tk.X, pady=5)
 
-        # ===== 可调参数 =====
-        self.sponsor_left_margin = 250   # 图片组距离左侧的间距（单位：像素）
-        self.sponsor_spacing = 100       # 两张图片之间的间距（单位：像素）
-        # ===================
+        self.sponsor_left_margin = 250
+        self.sponsor_spacing = 100
 
-        # 内部水平容器，使两张图片从左到右排列
         inner_frame = ttk.Frame(image_frame)
         inner_frame.pack(side=tk.LEFT, padx=(self.sponsor_left_margin, 0), fill=tk.X, expand=True)
 
-        # 左侧图片
         self.image_label1 = ttk.Label(inner_frame)
         self.image_label1.pack(side=tk.LEFT, padx=(0, self.sponsor_spacing // 2))
-
-        # 右侧图片
         self.image_label2 = ttk.Label(inner_frame)
         self.image_label2.pack(side=tk.LEFT, padx=(self.sponsor_spacing // 2, 0))
-
-        # 加载图片
         self.load_logos()
 
         # ---------- 第1行：FIT 文件选择 ----------
         file_frame = ttk.LabelFrame(self.main_frame, text="FIT 文件", padding=5)
         file_frame.pack(fill=tk.X, pady=5)
-
         self.file_var = tk.StringVar()
         ttk.Entry(file_frame, textvariable=self.file_var, width=65).pack(side=tk.LEFT, padx=5)
         ttk.Button(file_frame, text="浏览...", command=self.select_fit_file).pack(side=tk.RIGHT)
@@ -148,7 +137,6 @@ class FitVideoGeneratorApp(tk.Tk):
         # ---------- 第2行：输出目录选择 ----------
         out_frame = ttk.LabelFrame(self.main_frame, text="输出目录（视频存放位置）", padding=5)
         out_frame.pack(fill=tk.X, pady=5)
-
         self.out_dir_var = tk.StringVar(value=os.getcwd())
         ttk.Entry(out_frame, textvariable=self.out_dir_var, width=65).pack(side=tk.LEFT, padx=5)
         ttk.Button(out_frame, text="浏览...", command=self.select_output_dir).pack(side=tk.RIGHT)
@@ -157,97 +145,116 @@ class FitVideoGeneratorApp(tk.Tk):
         # ---------- 第3行：Lap 选择 ----------
         lap_frame = ttk.LabelFrame(self.main_frame, text="选择 Lap（注意可多选，但合成为一整个连续时间轴）", padding=5)
         lap_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
         listbox_frame = ttk.Frame(lap_frame)
         listbox_frame.pack(fill=tk.BOTH, expand=True)
-
         scrollbar = ttk.Scrollbar(listbox_frame, orient=tk.VERTICAL)
         self.lap_listbox = tk.Listbox(listbox_frame, selectmode=tk.MULTIPLE,
-                                      yscrollcommand=scrollbar.set, height=5)
+                                      yscrollcommand=scrollbar.set, height=2)
         scrollbar.config(command=self.lap_listbox.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.lap_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
         btn_frame = ttk.Frame(lap_frame)
         btn_frame.pack(fill=tk.X, pady=2)
         ttk.Button(btn_frame, text="全选", command=self.select_all_laps).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="取消全选", command=self.deselect_all_laps).pack(side=tk.LEFT, padx=5)
 
-        # ---------- 第4行：Alpha 模块设置 ----------
+        # ---------- 第4行：Alpha 模块设置（FPS 同行） ----------
         alpha_frame = ttk.LabelFrame(self.main_frame, text="Alpha 模块（HUD / 地图 / 海拔剖面图）", padding=5)
         alpha_frame.pack(fill=tk.X, pady=5)
-
         self.alpha_hud_var = tk.BooleanVar(value=False)
         self.alpha_map_var = tk.BooleanVar(value=False)
         self.alpha_elev_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(alpha_frame, text="HUD 视频", variable=self.alpha_hud_var).grid(row=0, column=0, sticky=tk.W, padx=5)
-        ttk.Checkbutton(alpha_frame, text="地图视频", variable=self.alpha_map_var).grid(row=0, column=1, sticky=tk.W, padx=5)
-        ttk.Checkbutton(alpha_frame, text="海拔剖面图视频", variable=self.alpha_elev_var).grid(row=0, column=2, sticky=tk.W, padx=5)
 
-        ttk.Label(alpha_frame, text="HUD FPS:").grid(row=1, column=0, sticky=tk.E, padx=2)
+        # HUD视频 + FPS
+        ttk.Checkbutton(alpha_frame, text="HUD视频", variable=self.alpha_hud_var).grid(
+            row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(alpha_frame, text="FPS:").grid(row=0, column=1, sticky=tk.W)
         self.alpha_hud_fps = tk.IntVar(value=ALPHA_HUD_FPS)
-        ttk.Spinbox(alpha_frame, from_=1, to=120, textvariable=self.alpha_hud_fps, width=5).grid(row=1, column=0, sticky=tk.W, padx=(58,5))
-
-        ttk.Label(alpha_frame, text="地图 FPS:").grid(row=1, column=1, sticky=tk.E, padx=2)
+        ttk.Spinbox(alpha_frame, from_=1, to=120, textvariable=self.alpha_hud_fps, width=5).grid(
+            row=0, column=2, sticky=tk.W, padx=(0, 15))
+        # 地图视频 + FPS
+        ttk.Checkbutton(alpha_frame, text="地图视频", variable=self.alpha_map_var).grid(
+            row=0, column=3, sticky=tk.W, padx=5)
+        ttk.Label(alpha_frame, text="FPS:").grid(row=0, column=4, sticky=tk.W)
         self.alpha_map_fps = tk.IntVar(value=ALPHA_MAP_FPS)
-        ttk.Spinbox(alpha_frame, from_=1, to=120, textvariable=self.alpha_map_fps, width=5).grid(row=1, column=1, sticky=tk.W, padx=(67,5))
-
-        ttk.Label(alpha_frame, text="海拔 FPS:").grid(row=1, column=2, sticky=tk.E, padx=2)
+        ttk.Spinbox(alpha_frame, from_=1, to=120, textvariable=self.alpha_map_fps, width=5).grid(
+            row=0, column=5, sticky=tk.W, padx=(0, 15))
+        # 海拔剖面图视频 + FPS
+        ttk.Checkbutton(alpha_frame, text="海拔剖面图视频", variable=self.alpha_elev_var).grid(
+            row=0, column=6, sticky=tk.W, padx=5)
+        ttk.Label(alpha_frame, text="FPS:").grid(row=0, column=7, sticky=tk.W)
         self.alpha_elev_fps = tk.IntVar(value=ALPHA_ELEVATION_FPS)
-        ttk.Spinbox(alpha_frame, from_=1, to=120, textvariable=self.alpha_elev_fps, width=5).grid(row=1, column=2, sticky=tk.W, padx=(83,5))
+        ttk.Spinbox(alpha_frame, from_=1, to=120, textvariable=self.alpha_elev_fps, width=5).grid(
+            row=0, column=8, sticky=tk.W)
 
-        # ---------- 第5行：Beta 模块设置 ----------
+        # ---------- 第5行：Beta 模块设置（FPS 同行） ----------
         beta_frame = ttk.LabelFrame(self.main_frame, text="Beta 模块（时间 / 累积距离 / 当前海拔高度）", padding=5)
         beta_frame.pack(fill=tk.X, pady=5)
-
         self.beta_time_var = tk.BooleanVar(value=False)
         self.beta_dist_var = tk.BooleanVar(value=False)
         self.beta_elev_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(beta_frame, text="时间视频", variable=self.beta_time_var).grid(row=0, column=0, sticky=tk.W, padx=5)
-        ttk.Checkbutton(beta_frame, text="累积距离视频", variable=self.beta_dist_var).grid(row=0, column=1, sticky=tk.W, padx=5)
-        ttk.Checkbutton(beta_frame, text="当前海拔高度视频", variable=self.beta_elev_var).grid(row=0, column=2, sticky=tk.W, padx=5)
 
-        ttk.Label(beta_frame, text="时间 FPS:").grid(row=1, column=0, sticky=tk.E, padx=2)
+        # 时间视频 + FPS
+        ttk.Checkbutton(beta_frame, text="时间视频", variable=self.beta_time_var).grid(
+            row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(beta_frame, text="FPS:").grid(row=0, column=1, sticky=tk.W)
         self.beta_time_fps = tk.IntVar(value=BETA_TIME_FPS)
-        ttk.Spinbox(beta_frame, from_=1, to=120, textvariable=self.beta_time_fps, width=5).grid(row=1, column=0, sticky=tk.W, padx=(73,5))
-
-        ttk.Label(beta_frame, text="距离 FPS:").grid(row=1, column=1, sticky=tk.E, padx=2)
+        ttk.Spinbox(beta_frame, from_=1, to=120, textvariable=self.beta_time_fps, width=5).grid(
+            row=0, column=2, sticky=tk.W, padx=(0, 15))
+        # 累积距离视频 + FPS
+        ttk.Checkbutton(beta_frame, text="累积距离视频", variable=self.beta_dist_var).grid(
+            row=0, column=3, sticky=tk.W, padx=5)
+        ttk.Label(beta_frame, text="FPS:").grid(row=0, column=4, sticky=tk.W)
         self.beta_dist_fps = tk.IntVar(value=BETA_DISTANCE_FPS)
-        ttk.Spinbox(beta_frame, from_=1, to=120, textvariable=self.beta_dist_fps, width=5).grid(row=1, column=1, sticky=tk.W, padx=(81,5))
-
-        ttk.Label(beta_frame, text="海拔 FPS:").grid(row=1, column=2, sticky=tk.E, padx=2)
+        ttk.Spinbox(beta_frame, from_=1, to=120, textvariable=self.beta_dist_fps, width=5).grid(
+            row=0, column=5, sticky=tk.W, padx=(0, 15))
+        # 当前海拔高度视频 + FPS
+        ttk.Checkbutton(beta_frame, text="当前海拔高度视频", variable=self.beta_elev_var).grid(
+            row=0, column=6, sticky=tk.W, padx=5)
+        ttk.Label(beta_frame, text="FPS:").grid(row=0, column=7, sticky=tk.W)
         self.beta_elev_fps = tk.IntVar(value=BETA_ELEVATION_FPS)
-        ttk.Spinbox(beta_frame, from_=1, to=120, textvariable=self.beta_elev_fps, width=5).grid(row=1, column=2, sticky=tk.W, padx=(93,5))
+        ttk.Spinbox(beta_frame, from_=1, to=120, textvariable=self.beta_elev_fps, width=5).grid(
+            row=0, column=8, sticky=tk.W)
+
+        # ---------- 第5.5行：Gamma 模块设置 ----------
+        gamma_frame = ttk.LabelFrame(self.main_frame, text="Gamma 模块（训练指标 AP/NP/IF/VI/TSS/平均心率/平均速度）", padding=5)
+        gamma_frame.pack(fill=tk.X, pady=5)
+        self.gamma_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(gamma_frame, text="训练指标视频", variable=self.gamma_var).grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(gamma_frame, text="FTP (W):").grid(row=0, column=1, sticky=tk.E, padx=5)
+        self.gamma_ftp = tk.IntVar(value=GAMMA_FTP)
+        ttk.Spinbox(gamma_frame, from_=100, to=500, increment=5, textvariable=self.gamma_ftp, width=6).grid(row=0, column=2, sticky=tk.W, padx=5)
+        ttk.Label(gamma_frame, text="FPS:").grid(row=0, column=3, sticky=tk.E, padx=5)
+        self.gamma_fps = tk.IntVar(value=GAMMA_METRICS_FPS)
+        ttk.Spinbox(gamma_frame, from_=1, to=30, textvariable=self.gamma_fps, width=5).grid(row=0, column=4, sticky=tk.W, padx=5)
+
+        # ---------- 第5.6行：一键全选按钮（放在 Gamma 下方） ----------
+        quick_frame = ttk.Frame(self.main_frame)
+        quick_frame.pack(fill=tk.X, pady=2)
+        ttk.Button(quick_frame, text="一键全选（7项）", command=self.select_all_videos).pack(side=tk.LEFT, padx=5)
+        ttk.Button(quick_frame, text="清除全部选择", command=self.deselect_all_videos).pack(side=tk.LEFT, padx=5)
 
         # ---------- 第6行：控制按钮 + 进度条 ----------
         control_frame = ttk.Frame(self.main_frame)
         control_frame.pack(fill=tk.X, pady=10)
-
-        # 开始生成按钮（绿色）
         self.run_button = tk.Button(control_frame, text="开始生成", command=self.start_generation,
                                     bg="#4CAF50", fg="white", font=("Arial", 10, "bold"),
                                     activebackground="#66BB6A", relief=tk.RAISED, padx=10)
         self.run_button.pack(side=tk.LEFT, padx=5)
-
-        # 结束生成按钮（红色）
         self.stop_button = tk.Button(control_frame, text="强制结束", command=self.stop_generation,
                                      bg="#F44336", fg="white", font=("Arial", 10, "bold"),
                                      activebackground="#EF5350", relief=tk.RAISED, padx=10, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
-
-        # 清理日志按钮
         self.clear_log_button = tk.Button(control_frame, text="清理日志", command=self.clear_log,
                                           bg="#2196F3", fg="white", font=("Arial", 10, "bold"),
                                           activebackground="#42A5F5", relief=tk.RAISED, padx=10)
         self.clear_log_button.pack(side=tk.LEFT, padx=5)
-
         self.progress = ttk.Progressbar(control_frame, mode='indeterminate', length=390)
         self.progress.pack(side=tk.LEFT, padx=20, fill=tk.X, expand=True)
 
         # ---------- 第7行：输出日志区域 ----------
         log_frame = ttk.LabelFrame(self.main_frame, text="运行日志（包含模块内部输出）", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
         self.log_text = tk.Text(log_frame, height=12, wrap=tk.WORD, state=tk.DISABLED)
         scroll_log = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scroll_log.set)
@@ -257,11 +264,45 @@ class FitVideoGeneratorApp(tk.Tk):
         # 绑定事件
         self.file_var.trace_add("write", lambda *args: self.on_fit_file_changed())
 
+        # 窗口关闭协议
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    # -------------------- 视频类型全选/全不选 --------------------
+    def select_all_videos(self):
+        """一键勾选全部 7 个视频类型：Alpha(3) + Beta(3) + Gamma(1)"""
+        self.alpha_hud_var.set(True)
+        self.alpha_map_var.set(True)
+        self.alpha_elev_var.set(True)
+        self.beta_time_var.set(True)
+        self.beta_dist_var.set(True)
+        self.beta_elev_var.set(True)
+        self.gamma_var.set(True)
+        self.log("已一键全选 7 个视频类型")
+
+    def deselect_all_videos(self):
+        """清除所有视频类型的勾选"""
+        self.alpha_hud_var.set(False)
+        self.alpha_map_var.set(False)
+        self.alpha_elev_var.set(False)
+        self.beta_time_var.set(False)
+        self.beta_dist_var.set(False)
+        self.beta_elev_var.set(False)
+        self.gamma_var.set(False)
+        self.log("已清除全部视频类型选择")
+
+    # -------------------- 窗口关闭确认（直接关闭，不清理） --------------------
+    def on_closing(self):
+        if self.generation_thread is not None and self.generation_thread.is_alive():
+            if messagebox.askyesno("确认退出", "生成任务正在进行中，确定要退出吗？"):
+                self.destroy()
+            else:
+                return
+        else:
+            self.destroy()
+
     # -------------------- 图片加载（双图片） --------------------
     def load_logos(self):
-        """加载两张赞助商图片，自动缩放至合适高度"""
-        base_height = 26  # 统一高度，可根据需要调整
-        # 加载第一张图片
+        base_height = 26
         try:
             img_pil1 = Image.open(LOGO_PATH1)
             ratio1 = base_height / img_pil1.height
@@ -270,10 +311,9 @@ class FitVideoGeneratorApp(tk.Tk):
             self.logo_image1 = ImageTk.PhotoImage(img_resized1)
             self.image_label1.config(image=self.logo_image1)
         except Exception as e:
-            self.image_label1.config(text=f"Logo1 加载失败", foreground="gray")
+            self.image_label1.config(text="Logo1 加载失败", foreground="gray")
             print(f"Logo1 加载失败: {e}")
 
-        # 加载第二张图片
         try:
             img_pil2 = Image.open(LOGO_PATH2)
             ratio2 = base_height / img_pil2.height
@@ -282,7 +322,7 @@ class FitVideoGeneratorApp(tk.Tk):
             self.logo_image2 = ImageTk.PhotoImage(img_resized2)
             self.image_label2.config(image=self.logo_image2)
         except Exception as e:
-            self.image_label2.config(text=f"Logo2 加载失败", foreground="gray")
+            self.image_label2.config(text="Logo2 加载失败", foreground="gray")
             print(f"Logo2 加载失败: {e}")
 
     # -------------------- 日志处理 --------------------
@@ -370,13 +410,8 @@ class FitVideoGeneratorApp(tk.Tk):
     def _seconds_to_hms(self, sec):
         if sec is None:
             return "N/A"
-        h = int(sec // 3600)
-        m = int((sec % 3600) // 60)
-        s = int(sec % 60)
-        if h > 0:
-            return f"{h:02d}:{m:02d}:{s:02d}"
-        else:
-            return f"{m:02d}:{s:02d}"
+        h = int(sec // 3600); m = int((sec % 3600) // 60); s = int(sec % 60)
+        return f"{h:02d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
     def select_all_laps(self):
         self.lap_listbox.selection_set(0, tk.END)
@@ -398,9 +433,10 @@ class FitVideoGeneratorApp(tk.Tk):
             return
 
         alpha_any = self.alpha_hud_var.get() or self.alpha_map_var.get() or self.alpha_elev_var.get()
-        beta_any = self.beta_time_var.get() or self.beta_dist_var.get() or self.beta_elev_var.get()
-        if not alpha_any and not beta_any:
-            messagebox.showwarning("警告", "请至少选择一种视频类型（Alpha 或 Beta）")
+        beta_any  = self.beta_time_var.get() or self.beta_dist_var.get() or self.beta_elev_var.get()
+        gamma_any = self.gamma_var.get()
+        if not alpha_any and not beta_any and not gamma_any:
+            messagebox.showwarning("警告", "请至少选择一种视频类型（Alpha / Beta / Gamma）")
             return
 
         self.output_dir = self.out_dir_var.get().strip()
@@ -424,6 +460,7 @@ class FitVideoGeneratorApp(tk.Tk):
         self.generation_thread.start()
 
     def stop_generation(self):
+        """强制结束：设置停止标志、等待线程、清理临时文件、恢复 UI。"""
         if self.generation_thread is None or not self.generation_thread.is_alive():
             self.log("当前没有正在运行的任务")
             return
@@ -447,6 +484,7 @@ class FitVideoGeneratorApp(tk.Tk):
             os.path.join(self.output_dir, "frames_elevation"),
             os.path.join(self.output_dir, "frames_timestamp"),
             os.path.join(self.output_dir, "frames_distance"),
+            os.path.join(self.output_dir, "frames_gamma"),
         ]
         for d in possible_dirs:
             if os.path.isdir(d):
@@ -466,11 +504,11 @@ class FitVideoGeneratorApp(tk.Tk):
                 print("检测到停止信号，退出生成")
                 return
 
-            selected_indices = [self.lap_listbox.curselection()[i] for i in range(len(self.lap_listbox.curselection()))]
+            selected_indices = list(self.lap_listbox.curselection())
             selected_laps = [self.laps[i] for i in selected_indices]
 
             lap_start = min(lap['start_time'] for lap in selected_laps)
-            lap_end = max(lap['end_time'] for lap in selected_laps)
+            lap_end   = max(lap['end_time']   for lap in selected_laps)
 
             print(f"时间范围: {lap_start} ~ {lap_end}")
             print(f"总时长: {(lap_end - lap_start).total_seconds():.1f} 秒")
@@ -488,7 +526,7 @@ class FitVideoGeneratorApp(tk.Tk):
                 if ffmpeg_path is None:
                     raise RuntimeError("找不到 ffmpeg，请确保 ffmpeg.exe 与程序同在，或系统已安装 ffmpeg 并加入 PATH")
                 print(f"FFmpeg 路径: {ffmpeg_path}")
-                mod_alpha.FFMPEG_PATH = get_ffmpeg_path()
+                mod_alpha.FFMPEG_PATH = ffmpeg_path
 
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -528,16 +566,16 @@ class FitVideoGeneratorApp(tk.Tk):
 
                 ffmpeg_path = get_ffmpeg_path()
                 if ffmpeg_path is None:
-                    raise RuntimeError("找不到 ffmpeg，请确保 ffmpeg.exe 与程序同在，或系统已安装 ffmpeg 并加入 PATH")
+                    raise RuntimeError("找不到 ffmpeg")
                 print(f"FFmpeg 路径: {ffmpeg_path}")
-                mod_beta.FFMPEG_PATH = get_ffmpeg_path()
+                mod_beta.FFMPEG_PATH = ffmpeg_path
 
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                mod_beta.OUTPUT_DIR_TIME = os.path.join(self.output_dir, "frames_timestamp")
+                mod_beta.OUTPUT_DIR_TIME     = os.path.join(self.output_dir, "frames_timestamp")
                 mod_beta.OUTPUT_DIR_DISTANCE = os.path.join(self.output_dir, "frames_distance")
                 mod_beta.OUTPUT_DIR_ELEVATION = os.path.join(self.output_dir, "frames_elevation")
-                mod_beta.OUTPUT_VIDEO_TIME = os.path.join(self.output_dir, f"beta_time_{timestamp}.mov")
-                mod_beta.OUTPUT_VIDEO_DISTANCE = os.path.join(self.output_dir, f"beta_dist_{timestamp}.mov")
+                mod_beta.OUTPUT_VIDEO_TIME      = os.path.join(self.output_dir, f"beta_time_{timestamp}.mov")
+                mod_beta.OUTPUT_VIDEO_DISTANCE  = os.path.join(self.output_dir, f"beta_dist_{timestamp}.mov")
                 mod_beta.OUTPUT_VIDEO_ELEVATION = os.path.join(self.output_dir, f"beta_elev_{timestamp}.mov")
 
                 if hasattr(mod_beta, 'FPS_TIME'):
@@ -562,6 +600,47 @@ class FitVideoGeneratorApp(tk.Tk):
             else:
                 if not self.stop_flag.is_set():
                     print("跳过 Beta 模块")
+
+            # ==================== Gamma 模块 ====================
+            if not self.stop_flag.is_set() and self.gamma_var.get():
+                print("--- 开始 Gamma 模块 ---")
+                if not os.path.exists(MODULE_PATH_GAMMA):
+                    raise FileNotFoundError(f"找不到 Gamma 模块文件: {MODULE_PATH_GAMMA}")
+                mod_gamma = load_module_from_path("mod_gamma", MODULE_PATH_GAMMA)
+                print("Gamma 模块加载成功")
+
+                ffmpeg_path = get_ffmpeg_path()
+                if ffmpeg_path is None:
+                    raise RuntimeError("找不到 ffmpeg")
+                print(f"FFmpeg 路径: {ffmpeg_path}")
+                mod_gamma.FFMPEG_PATH = ffmpeg_path
+
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                mod_gamma.OUTPUT_DIR_GAMMA = os.path.join(self.output_dir, "frames_gamma")
+                mod_gamma.OUTPUT_MOV_GAMMA = os.path.join(self.output_dir, f"gamma_metrics_{timestamp}.mov")
+
+                if hasattr(mod_gamma, 'METRICS_FPS'):
+                    mod_gamma.METRICS_FPS = self.gamma_fps.get()
+
+                selected_nums = [i + 1 for i in selected_indices]
+                covered_nums  = list(range(min(selected_nums), max(selected_nums) + 1))
+
+                if hasattr(mod_gamma, 'generate_gamma_metrics_video'):
+                    result = mod_gamma.generate_gamma_metrics_video(
+                        fit_path=self.fit_path,
+                        lap_start=lap_start,
+                        lap_end=lap_end,
+                        selected_nums=selected_nums,
+                        covered_nums=covered_nums,
+                        ftp=self.gamma_ftp.get(),
+                        metrics_fps=self.gamma_fps.get()
+                    )
+                    print(f"Gamma 完成: {result}")
+                else:
+                    raise AttributeError("Gamma 模块中没有 generate_gamma_metrics_video 函数")
+            else:
+                if not self.stop_flag.is_set():
+                    print("跳过 Gamma 模块")
 
             if not self.stop_flag.is_set():
                 print("✅ 所有任务已完成！")
