@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from fitparse import FitFile
 import matplotlib
-matplotlib.use('Agg')  # 必须在 import pyplot 之前设置，确保无显示环境下正常工作
+matplotlib.use('Agg')  # 必须在 import pyplot 之前，确保无显示环境正常工作
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import time
@@ -168,11 +168,14 @@ def load_and_filter(fit_path, start_abs_time, end_abs_time):
     if valid_speeds:
         print(f"[DEBUG] 速度范围: {min(valid_speeds):.1f} → {max(valid_speeds):.1f} km/h")
 
+    # ★★★ 关键修复：全部显式指定 dtype=float ★★★
+    # 防止 FIT 文件中心率/功率全是整数时，np.array 推断为 int64，
+    # 导致后续 np.isnan() 抛出 "ufunc 'isnan' not supported for the input types" 错误
     return {
-        'offsets': np.array(offsets),
-        'power': np.array(power),
-        'hr': np.array(hr),
-        'speed': np.array(speed)
+        'offsets': np.array(offsets, dtype=float),
+        'power':  np.array(power,  dtype=float),
+        'hr':      np.array(hr,     dtype=float),
+        'speed':   np.array(speed,  dtype=float)
     }
 
 
@@ -389,7 +392,7 @@ def render_gamma_frames(metrics, duration, metrics_fps):
 def assemble_gamma_mov(frame_dir, output_file, frame_count, fps):
     """
     使用 ffmpeg 合成 ProRes 4444 透明视频
-    注意：-profile:v 4 是 ffmpeg 对 ProRes 4444 的标准写法
+    -profile:v 4 是 ffmpeg 对 ProRes 4444 的标准写法
     -vendor apl0 确保 QuickTime/Final Cut 兼容
     """
     cmd = [
@@ -397,9 +400,9 @@ def assemble_gamma_mov(frame_dir, output_file, frame_count, fps):
         "-i", os.path.join(frame_dir, "frame_%06d.png"),
         "-vf", f"scale={METRICS_WIDTH}:{METRICS_HEIGHT},setsar=1",
         "-c:v", "prores_ks",
-        "-profile:v", "4",               # ProRes 4444 标准写法
-        "-vendor", "apl0",               # QuickTime 兼容标识
-        "-pix_fmt", "yuva444p10le",      # 10bit YUV + Alpha 通道
+        "-profile:v", "4",
+        "-vendor", "apl0",
+        "-pix_fmt", "yuva444p10le",
         "-frames:v", str(frame_count),
         output_file
     ]
@@ -412,7 +415,7 @@ def assemble_gamma_mov(frame_dir, output_file, frame_count, fps):
     return True
 
 
-# ==================== CLI（独立运行时的交互入口，被 import 时不执行） ====================
+# ==================== CLI（独立运行时的交互入口） ====================
 
 def find_fit_files():
     paths = [".", "./data", "./fit", "./activities"]
