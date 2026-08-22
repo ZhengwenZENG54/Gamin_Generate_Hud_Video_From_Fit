@@ -89,7 +89,7 @@ class StdoutRedirector(io.TextIOBase):
 class FitVideoGeneratorApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("FIT数据视频生成器V2.0.0")
+        self.title("FIT数据视频生成器V2.1.0")
         self.geometry("880x820")
         self.resizable(True, True)
 

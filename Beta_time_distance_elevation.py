@@ -271,8 +271,8 @@ def load_fit_data(fit_path, lap_start, lap_end):
                     if first_valid_elevation is None:
                         first_valid_elevation = elevation
                     # 从第一个有效海拔开始
-                    relative_elevation = elevation
-                    elevations.append(relative_elevation)
+                    absolute_elevation = elevation
+                    elevations.append(absolute_elevation)
                 else:
                     elevations.append(np.nan)
                 
