@@ -1,3 +1,13 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Delta: 海拔 / 坡度 / 累计爬升 HUD 视频生成器（1Hz FIT 专用 · 长坡修复版）
+核心修复：
+1. 累计爬升改用7s强平滑+无逐点差分过滤，解决长缓坡上升被误杀问题
+2. 平滑前填充海拔NaN，避免Savitzky-Golay滤波错误
+3. 对差分做3点滑动平均，进一步消除剩余噪声
+"""
+
 import os
 import sys
 import glob
@@ -13,53 +23,53 @@ from scipy.signal import savgol_filter
 from PIL import Image, ImageDraw, ImageFont
 
 # ============================================================
-# === Delta: elevation / gradient / cumulative gain HUD video
+# 可配置参数（已针对长坡优化）
 # ============================================================
-
-# ==================== 可配置参数 ====================
 DELTA_FPS = 5
-DELTA_WIDTH, DELTA_HEIGHT = 720, 80  # 横向长条，足够放下三组数据
+DELTA_WIDTH, DELTA_HEIGHT = 720, 80
 DELTA_FONT_SIZE = 28
 DELTA_PADDING = 12
 
-# 平滑参数
-ELEV_WEAK_SMOOTH_SEC = 2.0        # 实时海拔弱平滑窗口（秒）
-GRAD_STRONG_SMOOTH_SEC = 3.0      # 坡度计算用强平滑窗口（秒）
-GRAD_COMPENSATION_SEC = 1.5       # 相位补偿（秒）≈ 强平滑窗口/2
-GRAD_MIN_SPEED_KMH = 3.0          # 低于此速度不显示坡度
+# ---- 平滑（作用于原始 1Hz 数据）----
+ELEV_WEAK_SMOOTH_SEC = 2.0     # 显示海拔弱平滑窗口（秒）
+GRAD_STRONG_SMOOTH_SEC = 3.0   # 坡度用强平滑窗口（秒）
+GRAD_COMPENSATION_SEC = 1.5    # 相位补偿（秒）≈ 强平滑窗口/2
+GRAD_MIN_SPEED_KMH = 5.0       # 低于此速度不显示坡度
 
-# 累计爬升分段检测阈值
-GAIN_MIN_HEIGHT = 5.0             # 最小爬升段高度（米）
-GAIN_MIN_DIST = 50.0              # 最小爬升段距离（米）
-GAIN_DROP_TOLERANCE = 2.0         # 下坡容忍（米），小于此不算坡结束
+# ---- 累计爬升（长坡修复核心参数）----
+GAIN_SMOOTH_SEC = 7.0          # 累计爬升用强平滑窗口（秒，从3s→7s，关键改动）
+# 移除GAIN_STEP_NOISE：不再对逐点差分做阈值过滤，靠强平滑去噪
+GAIN_MIN_HEIGHT_M = 5.0        # 整体最小有效爬升段高度（米）
+GAIN_MIN_DIST_M = 50.0         # 整体最小有效爬升段距离（米）
 
-# 字体
-FONT_PATH = None  # None = 自动查找
-
-# ffmpeg
+# ---- 字体 / ffmpeg ----
+FONT_PATH = None
 FFMPEG_PATH = "ffmpeg"
 OUTPUT_DIR_DELTA = "frames_delta"
 OUTPUT_MOV_DELTA = None
-
 PRINT_INTERVAL = 5.0
 
-# ==================== 字体 ====================
+
+# ============================================================
+# 字体加载
+# ============================================================
 def load_font(size):
     try:
         if FONT_PATH and os.path.exists(FONT_PATH):
             return ImageFont.truetype(FONT_PATH, size)
-        try:
-            return ImageFont.truetype("arial.ttf", size)
-        except:
+        for name in ("arial.ttf", "DejaVuSans.ttf"):
             try:
-                return ImageFont.truetype("DejaVuSans.ttf", size)
-            except:
-                return ImageFont.load_default()
-    except:
+                return ImageFont.truetype(name, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+    except Exception:
         return ImageFont.load_default()
 
 
-# ==================== 交互 ====================
+# ============================================================
+# 交互工具：查找FIT/选择Lap/设置帧率
+# ============================================================
 def find_fit_files():
     paths = [".", "./data", "./fit", "./activities"]
     files = []
@@ -67,7 +77,6 @@ def find_fit_files():
         if os.path.exists(p):
             files.extend([os.path.join(p, f) for f in os.listdir(p) if f.lower().endswith(".fit")])
     return sorted(set(files))
-
 
 def select_laps(fit_path):
     fit = FitFile(fit_path)
@@ -78,43 +87,38 @@ def select_laps(fit_path):
         et = st + timedelta(seconds=v.get("total_elapsed_time", 0))
         if st and et > st:
             laps.append((i, st, et))
-
     if not laps:
         print("⚠️ 无有效 Lap")
         return None, None
-
     for display_num, (idx, st, et) in enumerate(laps, start=1):
         print(f"[{display_num}] {st.strftime('%H:%M:%S')} → {et.strftime('%H:%M:%S')}")
-
     choice = input("选择 Lap (q退出，支持多选如1,3): ").strip().lower()
     if choice == "q":
         return None, None
-
     try:
         selected_nums = sorted({int(x.strip()) for x in choice.split(',')})
     except ValueError:
         print("❌ 输入无效")
         return select_laps(fit_path)
-
     if not (1 <= min(selected_nums) <= max(selected_nums) <= len(laps)):
         print(f"❌ 请输入 1 ~ {len(laps)} 之间的数字")
         return select_laps(fit_path)
-
     selected_indices = [n - 1 for n in selected_nums]
     return laps[min(selected_indices)][1], laps[max(selected_indices)][2]
-
 
 def get_fps():
     try:
         val = input(f"帧率 (回车默认{DELTA_FPS}): ").strip()
         return int(val) if val else DELTA_FPS
-    except:
+    except Exception:
         return DELTA_FPS
 
 
-# ==================== 数据加载 ====================
+# ============================================================
+# 1) 加载原始1Hz FIT数据（不做插值）
+# ============================================================
 def load_fit_data(fit_path, lap_start, lap_end):
-    print("\n[步骤1/5] 加载 FIT 数据...")
+    print("\n[步骤1/6] 加载 FIT 数据（原始 1Hz record）...")
     fit = FitFile(fit_path)
     offsets, alts, dists, speeds = [], [], [], []
 
@@ -123,20 +127,13 @@ def load_fit_data(fit_path, lap_start, lap_end):
         ts = vals.get('timestamp')
         if ts is None or not (lap_start <= ts <= lap_end):
             continue
-
         offsets.append((ts - lap_start).total_seconds())
-
         alt = vals.get('enhanced_altitude') or vals.get('altitude')
         alts.append(alt if alt is not None else np.nan)
-
         dist = vals.get('distance')
         dists.append(dist if dist is not None else np.nan)
-
         s = vals.get('enhanced_speed', vals.get('speed', None))
-        if s is not None:
-            speeds.append(float(s) * 3.6)  # m/s → km/h
-        else:
-            speeds.append(np.nan)
+        speeds.append(float(s) * 3.6 if s is not None else np.nan)
 
     if not offsets:
         raise RuntimeError("指定时间范围内无有效数据")
@@ -144,20 +141,140 @@ def load_fit_data(fit_path, lap_start, lap_end):
     print(f"  有效记录数: {len(offsets)}")
     print(f"  海拔有效: {sum(~np.isnan(alts))}/{len(alts)}")
     print(f"  距离有效: {sum(~np.isnan(dists))}/{len(dists)}")
-
+    
+    offsets = np.array(offsets, dtype=float)
+    dt = np.diff(offsets)
+    if len(dt) > 0:
+        print(f"  采样间隔: min={dt.min():.3f}s mean={dt.mean():.3f}s max={dt.max():.3f}s")
+    
     return {
-        'offsets': np.array(offsets),
-        'alts': np.array(alts),
-        'dists': np.array(dists),
-        'speeds': np.array(speeds),
+        'offsets': offsets,
+        'alts': np.array(alts, dtype=float),
+        'dists': np.array(dists, dtype=float),
+        'speeds': np.array(speeds, dtype=float),
     }
 
 
-# ==================== 插值 ====================
-def interpolate_to_fps(data, duration_sec, fps):
-    """线性插值到目标 FPS"""
+# ============================================================
+# 2) 1Hz网格平滑（核心：先平滑再插值，支持NaN填充）
+# ============================================================
+def apply_smooth_1hz(values, dt_sec, window_sec, polyorder=2):
+    """Savitzky-Golay平滑，窗口按1Hz样本数对齐为奇数，自动处理NaN"""
+    window = int(round(window_sec / dt_sec))
+    if window % 2 == 0:
+        window += 1
+    if window < 5 or len(values) < window:
+        return values.copy()
+    
+    # 复制数据，避免修改原数组
+    v = values.copy()
+    # 填充NaN（线性插值，避免滤波错误）
+    valid = ~np.isnan(v)
+    if not np.all(valid):
+        # 用非NaN的索引和值做插值
+        f = interp1d(np.where(valid)[0], v[valid], kind='linear', fill_value="extrapolate")
+        v[~valid] = f(np.where(~valid)[0])
+    
+    return savgol_filter(v, window, polyorder)
+
+
+# ============================================================
+# 3) 坡度计算（速度法，1Hz稳定版）
+# ============================================================
+def compute_gradient_1hz(alts_smooth, speeds, dt):
+    """
+    坡度 = dz / (v*dt) * 100%
+    使用强平滑后的海拔 + 速度法，对1Hz气压计噪声稳定
+    """
+    n = len(alts_smooth)
+    gradient = np.full(n, np.nan)
+    dz = np.diff(alts_smooth)
+
+    v = speeds[1:].copy()
+    v_ms = v / 3.6  # km/h -> m/s
+    denom = v_ms * dt
+    with np.errstate(divide='ignore', invalid='ignore'):
+        g = dz / denom * 100.0
+    
+    # 限幅：坡度有效范围±60%，离群置nan
+    g = np.where(np.abs(g) > 60, np.nan, g)
+    # 低速/无效速度置nan
+    valid = (v_ms >= GRAD_MIN_SPEED_KMH / 3.6) & (~np.isnan(v_ms)) & (~np.isnan(g))
+    g_out = np.full_like(g, np.nan)
+    g_out[valid] = g[valid]
+    gradient[1:] = g_out
+
+    # 相位补偿：强平滑带来约window/2的滞后，向前对齐
+    shift = int(round(GRAD_COMPENSATION_SEC / dt))
+    if shift > 0 and shift < n:
+        gradient_shifted = np.full(n, np.nan)
+        gradient_shifted[:-shift] = gradient[shift:]
+        gradient = gradient_shifted
+    return gradient
+
+
+# ============================================================
+# 4) 累计爬升（长坡修复核心：强平滑+无逐点过滤）
+# ============================================================
+def compute_cumulative_gain_strava(alts_smooth, dists):
+    """
+    长坡修复版累计爬升（与Strava逻辑对齐）：
+    1. 7s强平滑已完全消除气压计逐点噪声，无需再过滤小差分
+    2. 仅对差分做3点滑动平均，进一步平滑剩余噪声，不影响缓坡真实上升
+    3. 累计所有正差分，不抵消长坡微小回落
+    """
+    n = len(alts_smooth)
+    if n < 2:
+        return np.zeros(n)
+    
+    # 1. 计算平滑后海拔的逐点差分
+    dh = np.diff(alts_smooth)
+    
+    # 2. 对差分做3点滑动平均（仅平滑噪声，不削减真实缓坡上升）
+    if len(dh) >= 3:
+        dh = np.convolve(dh, np.ones(3)/3, mode='same')
+    
+    # 3. 累计所有正差分（无阈值过滤，强平滑已去噪）
+    gain = np.cumsum(np.maximum(0.0, dh))
+    # 对齐长度（cumsum后少1个元素，开头补0）
+    gain = np.concatenate(([0.0], gain))
+    
+    # 4. 诊断信息（关键：对比原始总差和累计爬升）
+    raw_alt_diff = alts_smooth[-1] - alts_smooth[0] if n > 1 else 0.0
+    total_rise = gain[-1]
+    print(f"  [累计爬升诊断] 原始海拔总差: {raw_alt_diff:.1f}m | 算法累计爬升: {total_rise:.1f}m")
+    print(f"  [长坡修复] 使用{GAIN_SMOOTH_SEC}s强平滑，无逐点差分过滤")
+    
+    # 5. 整体有效性判断（仅过滤无意义的小活动）
+    total_dist = 0.0
+    if n > 1 and not np.isnan(dists[0]) and not np.isnan(dists[-1]):
+        total_dist = dists[-1] - dists[0]
+    if total_dist < 0:
+        total_dist = 0.0
+    
+    if total_rise < GAIN_MIN_HEIGHT_M or total_dist < GAIN_MIN_DIST_M:
+        print(f"  [有效性过滤] 总爬升{total_rise:.1f}m < {GAIN_MIN_HEIGHT_M}m 或 总距离{total_dist:.1f}m < {GAIN_MIN_DIST_M}m，累计置0")
+        return np.zeros(n)
+    return gain
+
+
+# ============================================================
+# 5) 坡度显示裁剪（修复原NumPy赋值错误）
+# ============================================================
+def clip_gradient_display(gradients, lo=0.2, hi=30.0):
+    """仅用于HUD显示裁剪，极小/极端坡度置NaN"""
+    out = gradients.copy()
+    out[np.abs(out) < lo] = np.nan
+    out[np.abs(out) > hi] = np.nan
+    return out
+
+
+# ============================================================
+# 6) 插值到FPS（仅用于显示，不影响计算结果）
+# ============================================================
+def interpolate_to_fps(arrays_dict, duration_sec, fps):
     time_points = np.linspace(0, duration_sec, int(duration_sec * fps) + 1)
-    x = data['offsets']
+    x = arrays_dict['offsets']
 
     def interp(arr, fill=np.nan):
         valid = ~np.isnan(arr)
@@ -166,177 +283,31 @@ def interpolate_to_fps(data, duration_sec, fps):
         f = interp1d(x[valid], arr[valid], kind='linear', fill_value="extrapolate")
         return f(time_points)
 
-    return {
-        'time': time_points,
-        'alts': interp(data['alts']),
-        'dists': interp(data['dists']),
-        'speeds': interp(data['speeds']),
-    }
-
-
-# ==================== 平滑 ====================
-def apply_smooth(values, fps, window_sec, polyorder=2):
-    """Savitzky-Golay 平滑，窗口自动对齐为奇数"""
-    window = int(window_sec * fps)
-    if window % 2 == 0:
-        window += 1
-    if window < 5 or len(values) < window:
-        return values
-    return savgol_filter(values, window, polyorder)
-
-
-# ==================== 坡度计算 ====================
-def compute_gradient(alts_smooth, dists, speeds, fps):
-    """
-    坡度 = Δh / Δd × 100%
-    使用强平滑后的海拔 + 相位补偿
-    """
-    n = len(alts_smooth)
-    gradient = np.full(n, np.nan)
-
-    # 计算距离差分
-    dist_diff = np.diff(dists)
-    alt_diff = np.diff(alts_smooth)
-
-    for i in range(1, n):
-        if np.isnan(dist_diff[i-1]) or dist_diff[i-1] <= 0:
+    out = {'time': time_points}
+    for k, v in arrays_dict.items():
+        if k == 'offsets':
             continue
-        if np.isnan(alt_diff[i-1]):
-            continue
-
-        grad = alt_diff[i-1] / dist_diff[i-1] * 100.0
-
-        # 速度过低时不显示
-        spd = speeds[i] if not np.isnan(speeds[i]) else 0
-        if spd < GRAD_MIN_SPEED_KMH:
-            continue
-
-        gradient[i] = grad
-
-    # 相位补偿：往前移
-    shift = int(GRAD_COMPENSATION_SEC * fps)
-    if shift > 0 and shift < n:
-        gradient = np.roll(gradient, -shift)
-        gradient[-shift:] = np.nan
-
-    return gradient
+        out[k] = interp(v)
+    return out
 
 
-# ==================== 累计爬升（分段检测） ====================
-def compute_cumulative_gain(alts_smooth, dists):
-    n = len(alts_smooth)
-    gain = np.zeros(n)
-    acc = 0.0  # 已结算的累计爬升（基线）
-    i = 0
-
-    while i < n:
-        # NaN：gain 冻结为已结算值，不推进 acc
-        if np.isnan(alts_smooth[i]) or np.isnan(dists[i]):
-            gain[i] = acc
-            i += 1
-            continue
-
-        start_i = i
-        start_alt = alts_smooth[i]
-        start_dist = dists[i]
-        seg_max_alt = start_alt
-        seg_max_i = i
-
-        j = i + 1
-        segment_ended = False
-
-        while j < n:
-            if np.isnan(alts_smooth[j]) or np.isnan(dists[j]):
-                j += 1
-                continue
-
-            if alts_smooth[j] > seg_max_alt:
-                seg_max_alt = alts_smooth[j]
-                seg_max_i = j
-
-            drop = seg_max_alt - alts_smooth[j]
-            if drop >= GAIN_DROP_TOLERANCE:
-                # ---- 段结束 ----
-                segment_ended = True
-                total_rise = seg_max_alt - start_alt
-                total_dist = dists[seg_max_i] - start_dist
-
-                if total_rise >= GAIN_MIN_HEIGHT and total_dist >= GAIN_MIN_DIST:
-                    # 有效段：逐帧累加正差分
-                    for k in range(start_i, seg_max_i + 1):
-                        if np.isnan(alts_smooth[k]):
-                            gain[k] = acc
-                        else:
-                            added = (max(0.0, alts_smooth[k] - alts_smooth[k - 1])
-                                     if k > start_i else 0.0)
-                            acc += added
-                            gain[k] = acc
-                else:
-                    # 无效段：gain 冻结
-                    for k in range(start_i, seg_max_i + 1):
-                        gain[k] = acc
-
-                # 段结束探测点 j 及其之前的段尾下坡帧：填充为已结算值
-                for k in range(seg_max_i + 1, j + 1):
-                    if k < n:
-                        gain[k] = acc
-
-                i = j
-                break
-            j += 1
-
-        if not segment_ended:
-            # ---- 到达数据末尾 ----
-            total_rise = seg_max_alt - start_alt
-            total_dist = dists[seg_max_i] - start_dist
-            if total_rise >= GAIN_MIN_HEIGHT and total_dist >= GAIN_MIN_DIST:
-                for k in range(start_i, seg_max_i + 1):
-                    if np.isnan(alts_smooth[k]):
-                        gain[k] = acc
-                    else:
-                        added = (max(0.0, alts_smooth[k] - alts_smooth[k - 1])
-                                 if k > start_i else 0.0)
-                        acc += added
-                        gain[k] = acc
-            else:
-                for k in range(start_i, n):
-                    gain[k] = acc
-            i = n
-
-    return gain
-
-
-
-# ==================== 格式化 ====================
+# ============================================================
+# 格式化 / 渲染 / 视频合成
+# ============================================================
 def format_elevation(val):
-    """Elev:  9999.9m（固定宽度，右对齐数值）"""
-    if np.isnan(val):
-        return "Elev:    ---- m"
-    return f"Elev: {val:>6.1f} m"
-
+    return "Elev:    ---- m" if np.isnan(val) else f"Elev: {val:>6.1f} m"
 
 def format_gradient(val):
-    """Grade:  +1.0% （符号固定宽度，小数点绝对对齐）"""
     if np.isnan(val):
         return "Grade:     -- %"
-
-    # 符号：+ / - / 空格，统一占 1 字符
     sign = "+" if val > 0 else "-" if val < 0 else " "
-
-    # 数值右对齐到小数点（固定 4 字符：x.xx）
     return f"Grade: {sign}{abs(val):>4.1f}%"
 
-
 def format_gain(val):
-    """Gain:  9999.9m"""
-    if np.isnan(val):
-        return "Gain:    ---- m"
-    return f"Gain: {val:>6.1f} m"
+    return "Gain:    ---- m" if np.isnan(val) else f"Gain: {val:>6.1f} m"
 
-
-# ==================== 渲染 ====================
 def render_delta_frames(alts_weak, gradients, gains, fps):
-    print(f"\n[步骤4/5] 渲染帧 (FPS={fps})...")
+    print(f"\n[步骤5/6] 渲染帧 (FPS={fps})...")
     os.makedirs(OUTPUT_DIR_DELTA, exist_ok=True)
     for f in os.listdir(OUTPUT_DIR_DELTA):
         if f.startswith("frame_"):
@@ -344,8 +315,7 @@ def render_delta_frames(alts_weak, gradients, gains, fps):
 
     font = load_font(DELTA_FONT_SIZE)
     n = len(alts_weak)
-
-    # 预计算每段文本的固定宽度（用最大值测量）
+    
     dummy_img = Image.new('RGBA', (1, 1))
     dummy_draw = ImageDraw.Draw(dummy_img)
 
@@ -356,38 +326,32 @@ def render_delta_frames(alts_weak, gradients, gains, fps):
     w_elev = dummy_draw.textbbox((0, 0), sample_elev, font=font)[2]
     w_grad = dummy_draw.textbbox((0, 0), sample_grad, font=font)[2]
     w_gain = dummy_draw.textbbox((0, 0), sample_gain, font=font)[2]
-
-    gap = 40  # 三组之间的间距
+    
+    gap = 40
     total_w = w_elev + gap + w_grad + gap + w_gain
-    # 如果超过宽度则等比缩小字体（保险）
     if total_w > DELTA_WIDTH - 2 * DELTA_PADDING:
-        print(f"  ⚠️ 文本总宽 {total_w}px 超过画布 {DELTA_WIDTH}px，建议增大 DELTA_WIDTH")
+        print(f"  ⚠️ 文本总宽 {total_w}px 超过画布 {DELTA_WIDTH}px，建议增大DELTA_WIDTH")
 
     start_x = (DELTA_WIDTH - total_w) // 2
-    y = (DELTA_HEIGHT - dummy_draw.textbbox((0, 0), "Ay", font=font)[3]) // 2
+    text_height = dummy_draw.textbbox((0, 0), "Ay", font=font)[3]
+    y = (DELTA_HEIGHT - text_height) // 2
 
     start_time = time.time()
     last_print = start_time
-
+    
     for idx in range(n):
         current = time.time()
         if current - last_print >= PRINT_INTERVAL:
             elapsed = current - start_time
             processed = idx + 1
-            fps_actual = processed / elapsed
+            fps_actual = processed / elapsed if elapsed > 0 else 0
             remaining = (n - processed) / fps_actual if fps_actual > 0 else 0
             print(f"[Delta] {processed}/{n}帧 | 已用:{elapsed:.1f}s | 剩余:{remaining:.1f}s | {fps_actual:.1f}帧/s")
             last_print = current
 
         img = Image.new('RGBA', (DELTA_WIDTH, DELTA_HEIGHT), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-
-        # 黑色半透明背景条
-        draw.rounded_rectangle(
-            [0, 0, DELTA_WIDTH, DELTA_HEIGHT],
-            radius=10,
-            fill=(0, 0, 0, 140)
-        )
+        draw.rounded_rectangle([0, 0, DELTA_WIDTH, DELTA_HEIGHT], radius=10, fill=(0, 0, 0, 140))
 
         x = start_x
         draw.text((x, y), format_elevation(alts_weak[idx]), font=font, fill=(255, 255, 255))
@@ -396,138 +360,137 @@ def render_delta_frames(alts_weak, gradients, gains, fps):
         x += w_grad + gap
         draw.text((x, y), format_gain(gains[idx]), font=font, fill=(255, 255, 255))
 
-        path = os.path.join(OUTPUT_DIR_DELTA, f"frame_{idx:06d}.png")
-        img.save(path, 'PNG')
+        frame_path = os.path.join(OUTPUT_DIR_DELTA, f"frame_{idx:06d}.png")
+        img.save(frame_path, 'PNG')
 
     print(f"✅ 渲染完成，总耗时 {time.time() - start_time:.1f}s")
     return n
 
-
-# ==================== 合成 ====================
 def assemble_delta_mov(frame_count, fps):
     global OUTPUT_MOV_DELTA
     if OUTPUT_MOV_DELTA is None:
         ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         OUTPUT_MOV_DELTA = f"delta_elevation_{ts}.mov"
-
-    print(f"\n[步骤5/5] 合成视频: {OUTPUT_MOV_DELTA}")
+    print(f"\n[步骤6/6] 合成视频: {OUTPUT_MOV_DELTA}")
     cmd = [
         FFMPEG_PATH, "-y", "-framerate", str(fps), "-start_number", "0",
         "-i", os.path.join(OUTPUT_DIR_DELTA, "frame_%06d.png"),
         "-vf", f"scale={DELTA_WIDTH}:{DELTA_HEIGHT},setsar=1",
-        "-c:v", "prores_ks",
-        "-profile:v", "4444",
-        "-pix_fmt", "yuva444p10le",
-        "-frames:v", str(frame_count),
-        OUTPUT_MOV_DELTA
+        "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le",
+        "-frames:v", str(frame_count), OUTPUT_MOV_DELTA,
     ]
-
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
     result = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
     if result.returncode != 0:
         print(f"❌ ffmpeg 失败: {result.stderr[:500]}")
         return False
-
     print(f"✅ 视频生成成功: {OUTPUT_MOV_DELTA}")
     if os.path.exists(OUTPUT_MOV_DELTA):
-        size = os.path.getsize(OUTPUT_MOV_DELTA) / (1024 * 1024)
-        print(f"   文件大小: {size:.2f} MB")
+        print(f"   文件大小: {os.path.getsize(OUTPUT_MOV_DELTA)/(1024 * 1024):.2f} MB")
     return True
 
 
-# ==================== 主流程 ====================
+# ============================================================
+# 主流程
+# ============================================================
 def generate_delta_elevation_video(fit_path, lap_start, lap_end, fps=None):
     if fps is None:
         fps = DELTA_FPS
-
     duration = (lap_end - lap_start).total_seconds()
     if duration <= 0:
         raise ValueError("无效的 Lap 时长")
 
-    print("\n=== Delta 海拔/坡度/爬升视频配置 ===")
+    print("\n=== Delta 海拔/坡度/爬升视频配置 (1Hz FIT · 长坡修复版) ===")
     print(f"时间范围: {lap_start.strftime('%H:%M:%S')} → {lap_end.strftime('%H:%M:%S')}")
-    print(f"时长: {duration:.1f}秒")
-    print(f"FPS: {fps}")
-    print(f"预期帧数: {int(duration * fps) + 1}")
-    print(f"实时海拔平滑窗口: {ELEV_WEAK_SMOOTH_SEC}s (弱平滑)")
-    print(f"坡度计算平滑窗口: {GRAD_STRONG_SMOOTH_SEC}s (强平滑)")
-    print(f"坡度相位补偿: {GRAD_COMPENSATION_SEC}s")
-    print(f"累计爬升阈值: ≥{GAIN_MIN_HEIGHT}m / ≥{GAIN_MIN_DIST}m")
-    print("===============================\n")
+    print(f"时长: {duration:.1f}秒 | FPS: {fps} | 预期帧数: {int(duration*fps)+1}")
+    print(f"流程: 原始1Hz强平滑 -> 坡度(速度法) -> 累计爬升(强平滑无过滤) -> 插值{fps}Hz -> 渲染")
+    print(f"  海拔弱平滑: {ELEV_WEAK_SMOOTH_SEC}s | 坡度强平滑: {GRAD_STRONG_SMOOTH_SEC}s")
+    print(f"  累计爬升平滑: {GAIN_SMOOTH_SEC}s（关键：增强平滑替代逐点过滤）")
+    print("============================================================\n")
 
-    # 1. 加载
     raw = load_fit_data(fit_path, lap_start, lap_end)
+    
+    # 关键：填充海拔NaN，避免Savitzky-Golay滤波错误
+    alts = raw['alts']
+    valid = ~np.isnan(alts)
+    if not np.all(valid):
+        nan_count = np.sum(~valid)
+        print(f"[预处理] 填充 {nan_count} 个海拔NaN值...")
+        f_interp = interp1d(raw['offsets'][valid], alts[valid], kind='linear', fill_value="extrapolate")
+        raw['alts'] = f_interp(raw['offsets'])
 
-    # 2. 插值
-    print("[步骤2/5] 插值数据...")
-    intp = interpolate_to_fps(raw, duration, fps)
-    print(f"  插值后帧数: {len(intp['time'])}")
+    # 原始1Hz采样间隔（用于平滑窗口换算）
+    dt = np.median(np.diff(raw['offsets'])) if len(raw['offsets']) > 1 else 1.0
+    print(f"[步骤2/6] 原始网格 dt={dt:.3f}s -> 平滑窗口按1Hz样本数计算")
 
-    # 3. 平滑（双轨）
-    print("[步骤3/5] 平滑处理...")
-    alts_weak = apply_smooth(intp['alts'], fps, ELEV_WEAK_SMOOTH_SEC)
-    alts_strong = apply_smooth(intp['alts'], fps, GRAD_STRONG_SMOOTH_SEC)
+    print("[步骤3/6] 平滑处理（先平滑，后插值）...")
+    alts_weak = apply_smooth_1hz(raw['alts'], dt, ELEV_WEAK_SMOOTH_SEC)
+    alts_strong = apply_smooth_1hz(raw['alts'], dt, GRAD_STRONG_SMOOTH_SEC)
+    alts_gain = apply_smooth_1hz(raw['alts'], dt, GAIN_SMOOTH_SEC)
 
-    # 坡度
-    gradients = compute_gradient(alts_strong, intp['dists'], intp['speeds'], fps)
+    print("[步骤4/6] 坡度计算（速度法）+ 累计爬升（长坡修复版）...")
+    gradients_1hz = compute_gradient_1hz(alts_strong, raw['speeds'], dt)
+    gains_1hz = compute_cumulative_gain_strava(alts_gain, raw['dists'])
 
-    # 累计爬升
-    gains = compute_cumulative_gain(alts_strong, intp['dists'])
+    print(f"  坡度范围(1Hz): {np.nanmin(gradients_1hz):.1f}% ~ {np.nanmax(gradients_1hz):.1f}%")
+    print(f"  累计爬升(长坡修复版,1Hz): {gains_1hz[-1]:.1f} m")
 
-    print(f"  坡度范围: {np.nanmin(gradients):.1f}% ~ {np.nanmax(gradients):.1f}%")
-    print(f"  累计爬升: {gains[-1]:.1f} m")
+    print(f"[步骤5/6] 插值到 {fps}Hz（仅用于显示）...")
+    interp_in = {
+        'offsets': raw['offsets'],
+        'alts_weak': alts_weak,
+        'gradients': gradients_1hz,
+        'gains': gains_1hz,
+    }
+    intp = interpolate_to_fps(interp_in, duration, fps)
+    alts_weak_fps = intp['alts_weak']
+    gradients_fps = clip_gradient_display(intp['gradients'])
+    gains_fps = intp['gains']
+    print(f"  插值后帧数: {len(alts_weak_fps)}")
 
-    # 4. 渲染
-    frame_count = render_delta_frames(alts_weak, gradients, gains, fps)
-
-    # 5. 合成
+    frame_count = render_delta_frames(alts_weak_fps, gradients_fps, gains_fps, fps)
     success = assemble_delta_mov(frame_count, fps)
 
-    # 清理
     if os.path.exists(OUTPUT_DIR_DELTA):
         shutil.rmtree(OUTPUT_DIR_DELTA)
-
-    if success:
-        return {'delta_elevation_video': OUTPUT_MOV_DELTA}
-    return {}
+    return {'delta_elevation_video': OUTPUT_MOV_DELTA} if success else {}
 
 
-# ==================== CLI ====================
+# ============================================================
+# CLI入口
+# ============================================================
 def main():
-    print("=" * 55)
-    print("Delta: 海拔 / 坡度 / 累计爬升 HUD 视频生成器")
-    print("=" * 55)
-
-    fits = find_fit_files()
+    print("=" * 60)
+    print("Delta: 海拔/坡度/累计爬升 HUD (1Hz FIT · 长坡修复版)")
+    print("=" * 60)
+    fit_arg = sys.argv[1] if len(sys.argv) > 1 else None
+    fits = [fit_arg] if fit_arg else find_fit_files()
     if not fits:
         print("❌ 未找到 .fit 文件")
         return
-
-    for i, f in enumerate(fits, 1):
-        print(f"[{i}] {f}")
-    choice = input("选择文件 (q退出): ").strip()
-    if choice.lower() == 'q':
-        return
-
-    try:
-        fit_path = fits[int(choice) - 1]
-    except:
-        print("❌ 无效选择")
-        return
+    if fit_arg:
+        fit_path = fit_arg
+    else:
+        for i, f in enumerate(fits, 1):
+            print(f"[{i}] {f}")
+        choice = input("选择文件 (q退出): ").strip()
+        if choice.lower() == 'q':
+            return
+        try:
+            fit_path = fits[int(choice) - 1]
+        except Exception:
+            print("❌ 无效选择")
+            return
 
     lap_start, lap_end = select_laps(fit_path)
     if lap_start is None:
         return
-
     fps = get_fps()
-
     result = generate_delta_elevation_video(fit_path, lap_start, lap_end, fps)
     if result:
         print(f"\n✅ 完成！输出: {result.get('delta_elevation_video')}")
     else:
         print("\n❌ 生成失败")
 
-
 if __name__ == "__main__":
     main()
-
