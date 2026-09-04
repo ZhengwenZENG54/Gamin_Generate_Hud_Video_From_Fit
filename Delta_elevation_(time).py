@@ -1,12 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Delta: 海拔 / 坡度 / 累计爬升 HUD 视频生成器（1Hz FIT 专用 · 长坡修复版）
-核心修复：
-1. 累计爬升改用7s强平滑+无逐点差分过滤，解决长缓坡上升被误杀问题
-2. 平滑前填充海拔NaN，避免Savitzky-Golay滤波错误
-3. 对差分做3点滑动平均，进一步消除剩余噪声
-"""
 
 import os
 import sys
@@ -34,10 +25,10 @@ DELTA_PADDING = 12
 ELEV_WEAK_SMOOTH_SEC = 2.0     # 显示海拔弱平滑窗口（秒）
 GRAD_STRONG_SMOOTH_SEC = 3.0   # 坡度用强平滑窗口（秒）
 GRAD_COMPENSATION_SEC = 1.5    # 相位补偿（秒）≈ 强平滑窗口/2
-GRAD_MIN_SPEED_KMH = 5.0       # 低于此速度不显示坡度
+GRAD_MIN_SPEED_KMH = 3.0       # 低于此速度不显示坡度
 
 # ---- 累计爬升（长坡修复核心参数）----
-GAIN_SMOOTH_SEC = 7.0          # 累计爬升用强平滑窗口（秒，从3s→7s，关键改动）
+GAIN_SMOOTH_SEC = 7.0          # 累计爬升用强平滑窗口（秒）
 # 移除GAIN_STEP_NOISE：不再对逐点差分做阈值过滤，靠强平滑去噪
 GAIN_MIN_HEIGHT_M = 5.0        # 整体最小有效爬升段高度（米）
 GAIN_MIN_DIST_M = 50.0         # 整体最小有效爬升段距离（米）
@@ -49,6 +40,8 @@ OUTPUT_DIR_DELTA = "frames_delta"
 OUTPUT_MOV_DELTA = None
 PRINT_INTERVAL = 5.0
 
+# ---- 显示配置（新增）----
+GRAD_DISPLAY_DECIMALS = 1  # 坡度显示小数位数：0=整数，1=1位小数，2=2位小数
 
 # ============================================================
 # 字体加载
@@ -190,8 +183,8 @@ def compute_gradient_1hz(alts_smooth, speeds, dt):
     gradient = np.full(n, np.nan)
     dz = np.diff(alts_smooth)
 
-    v = speeds[1:].copy()
-    v_ms = v / 3.6  # km/h -> m/s
+    v_avg = (speeds[:-1] + speeds[1:]) / 2 #v = speeds[1:].copy()
+    v_ms = v_avg / 3.6 #v_ms = v / 3.6  # km/h -> m/s
     denom = v_ms * dt
     with np.errstate(divide='ignore', invalid='ignore'):
         g = dz / denom * 100.0
@@ -261,10 +254,12 @@ def compute_cumulative_gain_strava(alts_smooth, dists):
 # ============================================================
 # 5) 坡度显示裁剪（修复原NumPy赋值错误）
 # ============================================================
-def clip_gradient_display(gradients, lo=0.2, hi=30.0):
+def clip_gradient_display(gradients, lo=0.1, hi=40.0):
     """仅用于HUD显示裁剪，极小/极端坡度置NaN"""
     out = gradients.copy()
-    out[np.abs(out) < lo] = np.nan
+    # 绝对值小于lo的极小坡度，直接赋值为0.0
+    out[np.abs(out) < lo] = 0.0 
+    # 超出合理范围的极端坡度，仍置为NaN，显示--%
     out[np.abs(out) > hi] = np.nan
     return out
 
@@ -300,8 +295,14 @@ def format_elevation(val):
 def format_gradient(val):
     if np.isnan(val):
         return "Grade:     -- %"
-    sign = "+" if val > 0 else "-" if val < 0 else " "
-    return f"Grade: {sign}{abs(val):>4.1f}%"
+    # 按配置的小数位数四舍五入
+    grad_val = round(val, GRAD_DISPLAY_DECIMALS)
+    sign = "+" if grad_val >= 0 else "-"
+    # 根据小数位数自动调整格式化规则
+    if GRAD_DISPLAY_DECIMALS == 0:
+        return f"Grade: {sign}{abs(int(grad_val)):>3d}%"
+    else:
+        return f"Grade: {sign}{abs(grad_val):>4.{GRAD_DISPLAY_DECIMALS}f}%"
 
 def format_gain(val):
     return "Gain:    ---- m" if np.isnan(val) else f"Gain: {val:>6.1f} m"
@@ -351,7 +352,7 @@ def render_delta_frames(alts_weak, gradients, gains, fps):
 
         img = Image.new('RGBA', (DELTA_WIDTH, DELTA_HEIGHT), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle([0, 0, DELTA_WIDTH, DELTA_HEIGHT], radius=10, fill=(0, 0, 0, 140))
+        #draw.rounded_rectangle([0, 0, DELTA_WIDTH, DELTA_HEIGHT], radius=10, fill=(0, 0, 0, 140)) 绘制背景矩形
 
         x = start_x
         draw.text((x, y), format_elevation(alts_weak[idx]), font=font, fill=(255, 255, 255))
