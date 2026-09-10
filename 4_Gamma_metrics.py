@@ -14,6 +14,7 @@ Gamma: 训练指标视频（Strava-like NP / AP / IF / VI / TSS / HR / AvgSPD）
         ffmpeg_path=None,
         output_dir="frames_gamma",
         output_file="gamma_metrics_xxx.mov",
+        stop_event=None,         # 可选：threading.Event 用于强制结束
     )
 
 CLI 独立运行:
@@ -46,11 +47,11 @@ DEFAULT_PARAMS = {
     "fps": 1,                # 帧率 (CLI 输入 0 = 跳过)
     "ftp": 250,              # 功能阈值功率 (W)
     "width": 480,            # 视频宽度 (像素)
-    "height": 270,           # 视频高度 (像素)
+    "height": 120,           # 视频高度 (像素)
     "font_size": 22,         # 字号
     "font_color": "white",   # 字体颜色 (matplotlib 颜色字符串)
     "bg_color": "black",     # 背景框颜色
-    "bg_alpha": 0.4,         # 背景框透明度 0~1
+    "bg_alpha": 0.2,         # 背景框透明度 0~1
     "ema_span": 25,          # NP 的指数加权跨度
     "speed_min_kmh": 3.0,    # 停车判定阈值 (km/h)，低于此值冻结指标
     "if_min_valid_seconds": 30,
@@ -90,6 +91,7 @@ def generate_gamma_metrics_video(
     output_file=None,             # 自定义输出视频文件名
     selected_nums=None,           # CLI 用：选中的 Lap 编号（仅日志）
     covered_nums=None,            # CLI 用：覆盖区间编号（仅日志）
+    stop_event=None,              # 强制结束事件（threading.Event），None=不启用
 ):
     """
     生成 Gamma 训练指标视频。
@@ -103,10 +105,11 @@ def generate_gamma_metrics_video(
         ffmpeg_path                 : 覆盖 FFmpeg 路径
         output_dir                  : 帧目录（默认 "frames_gamma"）
         output_file                 : 输出视频路径
+        stop_event                  : threading.Event；设置后强制结束并清理半成品
 
     返回 dict:
         success, gamma_video, frame_count,
-        frames_dir, warnings, total_time, cleanup_time
+        frames_dir, warnings, total_time, cleanup_time, stopped
     """
     global FFMPEG_PATH
     if ffmpeg_path:
@@ -128,6 +131,7 @@ def generate_gamma_metrics_video(
         "warnings": [],
         "total_time": 0.0,
         "cleanup_time": None,
+        "stopped": False,
     }
     t_program = time.time()
 
@@ -169,6 +173,7 @@ def generate_gamma_metrics_video(
         print(f"时长: {duration:.1f}s | 帧率: {metrics_fps}Hz | 预期帧数: {int(duration*metrics_fps)+1}")
         print(f"FTP: {ftp}W | 停车阈值: <{params['speed_min_kmh']} km/h 冻结指标")
         print(f"输出: {output_file}")
+        print(f"分辨率: {params['width']}x{params['height']}")
         print("===============================\n")
 
         print("[Gamma 1/4] 加载并过滤 FIT 数据...")
@@ -178,20 +183,45 @@ def generate_gamma_metrics_video(
         metrics = interpolate_metrics(raw, duration, metrics_fps, ftp, params)
 
         print("[Gamma 3/4] 渲染帧...")
-        frame_count = render_gamma_frames(metrics, duration, metrics_fps, frame_dir, params)
+        frame_count = render_gamma_frames(metrics, duration, metrics_fps, frame_dir, params,
+                                          stop_event=stop_event)
         result["frame_count"] = frame_count
+
+        if stop_event and stop_event.is_set():
+            result["stopped"] = True
+            print("[Gamma] 检测到停止信号，清理帧目录...")
+            if os.path.isdir(frame_dir):
+                shutil.rmtree(frame_dir)
+                print(f"[Gamma] 已清理帧目录: {frame_dir}")
+            return result
+
         if frame_count == 0:
             print("❌ 未生成任何帧")
             return result
 
         print("[Gamma 4/4] 合成视频...")
-        ok = assemble_gamma_mov(frame_dir, output_file, frame_count, metrics_fps)
+        ok = assemble_gamma_mov(
+            frame_dir,
+            output_file,
+            frame_count,
+            metrics_fps,
+            width=params["width"],
+            height=params["height"],
+            stop_event=stop_event,
+        )
         if ok:
             result["gamma_video"] = output_file
             result["success"] = True
             print(f"✅ Gamma 指标视频生成成功: {output_file}")
         else:
-            result["warnings"].append("ffmpeg 合成失败")
+            if stop_event and stop_event.is_set():
+                result["stopped"] = True
+                print("[Gamma] 检测到停止信号，清理帧目录...")
+                if os.path.isdir(frame_dir):
+                    shutil.rmtree(frame_dir)
+                    print(f"[Gamma] 已清理帧目录: {frame_dir}")
+            else:
+                result["warnings"].append("ffmpeg 合成失败")
 
     except Exception as e:
         print(f"[Gamma] ❌ 错误: {e}")
@@ -199,7 +229,7 @@ def generate_gamma_metrics_video(
         result["warnings"].append(str(e))
     finally:
         result["total_time"] = time.time() - t_program
-        if cleanup and result.get("success"):
+        if cleanup and result.get("success") and not result.get("stopped"):
             t0 = time.time()
             if os.path.isdir(frame_dir):
                 shutil.rmtree(frame_dir)
@@ -370,7 +400,7 @@ def interpolate_metrics(data, duration_sec, metrics_fps, ftp, params):
 # ============================================================
 # === 渲染
 # ============================================================
-def render_gamma_frames(metrics, duration, metrics_fps, frame_dir, params):
+def render_gamma_frames(metrics, duration, metrics_fps, frame_dir, params, stop_event=None):
     plt.rcParams["font.family"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
     plt.rcParams["font.weight"] = "normal"
@@ -396,10 +426,11 @@ def render_gamma_frames(metrics, duration, metrics_fps, frame_dir, params):
 
     ftp_val = metrics.get('ftp', 250)
     text_obj = ax.text(
-        0.05, 0.40, "",
+        0.05, 0.5, "",
         fontsize=params.get('font_size', 22),
-        fontweight='normal',   # ★ 显式指定
-        color='white',
+        fontweight='normal',
+        color=font_color,
+        va='center',
         bbox=dict(facecolor=bg_color, alpha=bg_alpha, boxstyle='round,pad=0.25'),
         transform=ax.transAxes, linespacing=1.5,
     )
@@ -409,6 +440,11 @@ def render_gamma_frames(metrics, duration, metrics_fps, frame_dir, params):
     last_print = t_start
 
     for idx in range(num_frames):
+        if stop_event and stop_event.is_set():
+            print(f"[Gamma] 检测到停止信号，帧渲染中断于 {idx}/{num_frames}")
+            plt.close(fig)
+            return idx
+
         now = time.time()
         if now - last_print >= print_interval:
             elapsed = now - t_start
@@ -423,13 +459,13 @@ def render_gamma_frames(metrics, duration, metrics_fps, frame_dir, params):
             return fmt.format(val) if not np.isnan(val) else na
 
         display = (
-            f"FTP:{ftp_val:.0f}W  AP:{_fmt(metrics['ap'][idx], '{:.0f}W')}  "
+            f"FTP:{ftp_val:.0f}W   AP:{_fmt(metrics['ap'][idx], '{:.0f}W')}  "
             f"NP:{_fmt(metrics['np'][idx], '{:.0f}W')}\n"
             f"IF:{_fmt(metrics['if'][idx], '{:.2f}')}    "
             f"VI:{_fmt(metrics['vi'][idx], '{:.2f}')}  "
             f"TSS:{_fmt(metrics['tss'][idx], '{:.0f}', '0')}\n"
             f"AvgHR:{_fmt(metrics['hr'][idx], '{:.0f}')}  "
-            f"AvgSPD:{_fmt(metrics['avg_speed'][idx], '{:.1f}')}km/h"
+            f"AvgSPD:{_fmt(metrics['avg_speed'][idx], '{:.1f}')} km/h"
         )
         text_obj.set_text(display)
         fig.savefig(
@@ -443,31 +479,71 @@ def render_gamma_frames(metrics, duration, metrics_fps, frame_dir, params):
     return num_frames
 
 
-def assemble_gamma_mov(frame_dir, output_file, frame_count, fps):
+def assemble_gamma_mov(frame_dir, output_file, frame_count, fps, width=None, height=None, stop_event=None):
     global FFMPEG_PATH
     if frame_count == 0:
         return False
+
+    if stop_event and stop_event.is_set():
+        print("[Gamma] 检测到停止信号，跳过视频合成")
+        return False
+
     try:
         subprocess.run([FFMPEG_PATH, "-version"], capture_output=True, check=True)
     except Exception:
         print(f"[Gamma] ❌ ffmpeg 不可用: {FFMPEG_PATH}")
         return False
 
+    # 若未显式传宽高，则使用 DEFAULT_PARAMS（兼容旧调用）
+    if width is None:
+        width = DEFAULT_PARAMS["width"]
+    if height is None:
+        height = DEFAULT_PARAMS["height"]
+
     cmd = [
         FFMPEG_PATH, "-y", "-framerate", str(fps), "-start_number", "0",
         "-i", os.path.join(frame_dir, "frame_%06d.png"),
-        "-vf", f"scale={DEFAULT_PARAMS['width']}:{DEFAULT_PARAMS['height']},setsar=1",
+        "-vf", f"scale={width}:{height},setsar=1",
         "-c:v", "prores_ks", "-profile:v", "4", "-vendor", "apl0",
         "-pix_fmt", "yuva444p10le",
         "-frames:v", str(frame_count),
         output_file,
     ]
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
-    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
-    if r.returncode != 0:
-        print(f"[Gamma] ❌ ffmpeg 合成失败: {r.stderr[:500]}")
+
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, creationflags=CREATE_NO_WINDOW)
+    except Exception as e:
+        print(f"[Gamma] ❌ 启动 ffmpeg 失败: {e}")
         return False
-    return True
+
+    while proc.poll() is None:
+        if stop_event and stop_event.is_set():
+            print("[Gamma] 检测到停止信号，终止 ffmpeg 进程...")
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            try:
+                proc.communicate()
+            except Exception:
+                pass
+            if os.path.exists(output_file):
+                os.remove(output_file)
+                print(f"[Gamma] 已删除半成品视频: {output_file}")
+            return False
+        time.sleep(0.1)
+
+    _, err = proc.communicate()
+    if proc.returncode == 0:
+        print(f"[Gamma] ✅ 视频合成成功: {output_file}")
+        return True
+    else:
+        print(f"[Gamma] ❌ ffmpeg 合成失败: {(err or '')[:500]}")
+        return False
 
 
 # ============================================================

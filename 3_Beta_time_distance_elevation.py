@@ -179,7 +179,7 @@ def make_text_frame(text, width, height, font, color, outline_w, outline_c):
 
 
 def generate_frames(lap_start, lap_end, fps, width, height, frame_dir,
-                    text_fn, print_tag):
+                    text_fn, print_tag, stop_event=None):
     duration = (lap_end - lap_start).total_seconds()
     total = int(duration * fps)
     os.makedirs(frame_dir, exist_ok=True)
@@ -189,9 +189,17 @@ def generate_frames(lap_start, lap_end, fps, width, height, frame_dir,
     if total == 0:
         print(f"[{print_tag}] 时长为0，无帧可生成")
         return 0
+
+    if stop_event and stop_event.is_set():
+        print(f"[{print_tag}] 检测到停止信号，取消本段生成")
+        return 0
+
     t0 = time.time()
     last = t0
     for i in range(total):
+        if stop_event and stop_event.is_set():
+            print(f"[{print_tag}] 检测到停止信号，帧生成中断于 {i}/{total}")
+            return i
         now = time.time()
         if now - last >= PRINT_INTERVAL:
             el = now - t0
@@ -206,15 +214,22 @@ def generate_frames(lap_start, lap_end, fps, width, height, frame_dir,
     return total
 
 
-def compile_video(frame_dir, output_file, frame_count, width, height, fps, prefix="frame_"):
+def compile_video(frame_dir, output_file, frame_count, width, height, fps,
+                  prefix="frame_", stop_event=None):
     global FFMPEG_PATH
     if frame_count == 0:
         return False
+
+    if stop_event and stop_event.is_set():
+        print("[Beta_合成] 检测到停止信号，跳过视频合成")
+        return False
+
     try:
         subprocess.run([FFMPEG_PATH, "-version"], capture_output=True, check=True)
     except Exception:
         print(f"[Beta_合成] ffmpeg 不可用: {FFMPEG_PATH}")
         return False
+
     cmd = [
         FFMPEG_PATH, "-y",
         "-framerate", str(fps),
@@ -227,12 +242,39 @@ def compile_video(frame_dir, output_file, frame_count, width, height, fps, prefi
         output_file,
     ]
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
-    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
-    if r.returncode == 0:
+
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, creationflags=CREATE_NO_WINDOW)
+    except Exception as e:
+        print(f"[Beta_合成] 启动 ffmpeg 失败: {e}")
+        return False
+
+    while proc.poll() is None:
+        if stop_event and stop_event.is_set():
+            print("[Beta_合成] 检测到停止信号，终止 ffmpeg 进程...")
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            try:
+                proc.communicate()
+            except Exception:
+                pass
+            if os.path.exists(output_file):
+                os.remove(output_file)
+                print(f"[Beta_合成] 已删除半成品视频: {output_file}")
+            return False
+        time.sleep(0.1)
+
+    _, err = proc.communicate()
+    if proc.returncode == 0:
         print(f"[Beta_合成] 成功: {output_file}")
         return True
     else:
-        print(f"[Beta_合成] 失败: {r.stderr[:300]}")
+        print(f"[Beta_合成] 失败: {(err or '')[:300]}")
         return False
 
 
@@ -245,10 +287,11 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
                         params_dict_time=None, params_dict_distance=None, params_dict_elevation=None,
                         ffmpeg_path=None, output_dir=None,
                         output_file_time=None, output_file_distance=None, output_file_elevation=None,
-                        cleanup=False):
+                        cleanup=False, stop_event=None):
     """
     cleanup=False (默认) -> 保留帧目录，由 GUI 统一清理
     cleanup=True  (CLI)  -> 合成后自清理
+    stop_event=None       -> 不启用强制结束（兼容旧调用）
     """
     global FFMPEG_PATH
     if ffmpeg_path:
@@ -271,6 +314,7 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
     result = {
         "success": False, "time_video": None, "distance_video": None,
         "elevation_video": None, "cleanup_time": 0.0, "total_time": 0.0,
+        "stopped": False,
     }
     t0_all = time.time()
 
@@ -319,7 +363,6 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
             print(f"[Beta] 时间视频尺寸: {time_w}x{time_h}")
 
         if generate_distance:
-            # 使用足够长的示例文本，保证不会裁剪实际内容
             sample_dist = f"{p_dist['prefix']}9999.99{p_dist['suffix']}"
             dist_w, dist_h = calc_video_size_for_text(
                 sample_dist, dist_font,
@@ -354,42 +397,86 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
         dir_e = os.path.join(out_dir, BETA_ELEVATION_FRAMES)
 
         cnt_t = cnt_d = cnt_e = 0
-        if generate_time:
+        stopped = False
+
+        # ---- 时间视频 ----
+        if generate_time and not (stop_event and stop_event.is_set()):
             cnt_t = generate_frames(
                 lap_start, lap_end, fps_t, time_w, time_h, dir_t,
                 lambda t, i: make_text_frame(
                     (t + timedelta(hours=tz)).strftime("%Y-%m-%d %H:%M:%S"),
                     time_w, time_h, time_font, p_time["font_color"],
                     p_time["outline_width"], p_time["outline_color"]),
-                "Beta_Time")
-        if generate_distance and iv_dist is not None:
+                "Beta_Time", stop_event)
+            if stop_event and stop_event.is_set():
+                stopped = True
+                if os.path.isdir(dir_t):
+                    shutil.rmtree(dir_t)
+                    print(f"[Beta] 已清理被中断的时间帧目录: {dir_t}")
+
+        # ---- 距离视频 ----
+        if generate_distance and iv_dist is not None and not (stop_event and stop_event.is_set()):
             cnt_d = generate_frames(
                 lap_start, lap_end, fps_d, dist_w, dist_h, dir_d,
                 lambda t, i: make_text_frame(
                     f"{p_dist['prefix']}{iv_dist[i]/1000:.2f}{p_dist['suffix']}",
                     dist_w, dist_h, dist_font, p_dist["font_color"],
                     p_dist["outline_width"], p_dist["outline_color"]),
-                "Beta_Dist")
-        if generate_elevation and iv_elev is not None:
+                "Beta_Dist", stop_event)
+            if stop_event and stop_event.is_set():
+                stopped = True
+                if os.path.isdir(dir_d):
+                    shutil.rmtree(dir_d)
+                    print(f"[Beta] 已清理被中断的距离帧目录: {dir_d}")
+
+        # ---- 海拔视频 ----
+        if generate_elevation and iv_elev is not None and not (stop_event and stop_event.is_set()):
             cnt_e = generate_frames(
                 lap_start, lap_end, fps_e, elev_w, elev_h, dir_e,
                 lambda t, i: make_text_frame(
                     f"{p_elev['prefix']}{iv_elev[i]:.1f}{p_elev['suffix']}",
                     elev_w, elev_h, elev_font, p_elev["font_color"],
                     p_elev["outline_width"], p_elev["outline_color"]),
-                "Beta_Elev")
+                "Beta_Elev", stop_event)
+            if stop_event and stop_event.is_set():
+                stopped = True
+                if os.path.isdir(dir_e):
+                    shutil.rmtree(dir_e)
+                    print(f"[Beta] 已清理被中断的海拔帧目录: {dir_e}")
 
-        if generate_time and cnt_t > 0:
-            if compile_video(dir_t, out_time, cnt_t, time_w, time_h, fps_t):
+        # ---- 合成（只合成未中断且帧数 > 0 的）----
+        if generate_time and cnt_t > 0 and not (stop_event and stop_event.is_set()):
+            if compile_video(dir_t, out_time, cnt_t, time_w, time_h, fps_t,
+                             stop_event=stop_event):
                 result["time_video"] = out_time
-        if generate_distance and cnt_d > 0:
-            if compile_video(dir_d, out_dist, cnt_d, dist_w, dist_h, fps_d):
-                result["distance_video"] = out_dist
-        if generate_elevation and cnt_e > 0:
-            if compile_video(dir_e, out_elev, cnt_e, elev_w, elev_h, fps_e):
-                result["elevation_video"] = out_elev
+            elif stop_event and stop_event.is_set():
+                stopped = True
+                if os.path.isdir(dir_t):
+                    shutil.rmtree(dir_t)
+                    print(f"[Beta] 已清理合成中断的时间帧目录: {dir_t}")
 
-        result["success"] = True
+        if generate_distance and cnt_d > 0 and not (stop_event and stop_event.is_set()):
+            if compile_video(dir_d, out_dist, cnt_d, dist_w, dist_h, fps_d,
+                             stop_event=stop_event):
+                result["distance_video"] = out_dist
+            elif stop_event and stop_event.is_set():
+                stopped = True
+                if os.path.isdir(dir_d):
+                    shutil.rmtree(dir_d)
+                    print(f"[Beta] 已清理合成中断的距离帧目录: {dir_d}")
+
+        if generate_elevation and cnt_e > 0 and not (stop_event and stop_event.is_set()):
+            if compile_video(dir_e, out_elev, cnt_e, elev_w, elev_h, fps_e,
+                             stop_event=stop_event):
+                result["elevation_video"] = out_elev
+            elif stop_event and stop_event.is_set():
+                stopped = True
+                if os.path.isdir(dir_e):
+                    shutil.rmtree(dir_e)
+                    print(f"[Beta] 已清理合成中断的海拔帧目录: {dir_e}")
+
+        result["stopped"] = stopped
+        result["success"] = not stopped
 
     except Exception as e:
         print(f"[Beta] 错误: {e}")
@@ -397,7 +484,7 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
         result["success"] = False
 
     finally:
-        if cleanup and result.get("success"):
+        if cleanup and result.get("success") and not result.get("stopped"):
             result["cleanup_time"] = cleanup_all(out_dir)
 
     result["total_time"] = time.time() - t0_all

@@ -4,24 +4,10 @@ Alpha_map_elevation.py
 ========================
 Alpha 模块的 MAP / ELEVATION 子模块。
 
-职责：
-  - Alpha_MAP        : 骑行轨迹地图叠加层视频
-  - Alpha_ELEVATION  : 海拔剖面图叠加层视频
-
-两个模块强制共用同一时间轴（无论单独运行还是被调用）。
-
-两种使用方式：
-  1) 单独运行（CLI）：交互式选择 FIT 文件 / Lap（一次选择，两个模块共用）
-  2) 被调用：通过 generate_map_elevation_video() / generate_map_video() /
-             generate_elevation_video() 传入参数，无 input() 阻塞
-
-设计原则（与 Alpha_SPHC 对称）：
-  - 自包含：不 import SPHC，load_and_filter / interpolate / assemble 等均在本文件
-  - 串行执行：一次只处理一个视频（生成 frames + 合成），无多线程分支
-  - 统一清理：两个视频都生成完毕后，最后统一清理中间帧目录
-  - 边界检查：渲染前纯数学估算，越界只警告 + 写入 warnings，不阻断渲染
-  - 数据缺失：只跳过缺失模块，另一模块照常生成，并在返回中明确标注
-  - 冲突处理：API 模式帧目录已存在则抛 FileExistsError；CLI 入口先清理再调用
+★ 已加入 stop_event 强制结束支持：
+  - 渲染循环每帧检查 stop_event，触发即中断
+  - ffmpeg 改用 Popen 轮询，触发即 kill 并删除半成品
+  - 清理策略：保留「已完整合成」的视频，只清理被中断模块的中间文件
 """
 
 import os
@@ -39,54 +25,49 @@ import matplotlib.pyplot as plt
 
 
 # ============================================================
-# 全局可配置变量（兼容 exe / GUI 打包场景，允许外部覆盖）
+# 全局可配置变量
 # ============================================================
 FFMPEG_PATH = "ffmpeg"
 
-OUTPUT_DIR_MAP = None        # None 表示使用默认固定名 "frames_Alpha_MAP"
+OUTPUT_DIR_MAP = None
 OUTPUT_MOV_MAP = None
-OUTPUT_DIR_ELEVATION = None  # None 表示使用默认固定名 "frames_Alpha_ELEVATION"
+OUTPUT_DIR_ELEVATION = None
 OUTPUT_MOV_ELEVATION = None
 
-# 默认帧率（图像层，5fps）
 MAP_DEFAULT_FPS = 5
 ELEVATION_DEFAULT_FPS = 5
 
-# 固定帧目录名（不加时间戳，冲突处理见下方逻辑）
 DEFAULT_FRAMES_DIR_MAP = "frames_Alpha_MAP"
 DEFAULT_FRAMES_DIR_ELEVATION = "frames_Alpha_ELEVATION"
 
 
 # ============================================================
-# 默认参数（可通过 params_dict 覆盖）
-#   数值直接抄原 Alpha 模块
+# 默认参数
 # ============================================================
-# ---------- MAP ----------
 DEFAULT_PARAMS_MAP = {
     'width': 270,
     'height': 270,
     'map_line_width': 5,
-    'map_line_color': (1.0, 0.5, 0.0, 1.0),       # RGBA: 橙色不透明
-    'map_completed_color': (0.0, 0.6, 1.0, 1.0),   # RGBA: 蓝色
-    'map_marker_color': (1.0, 0.0, 0.0, 1.0),      # RGBA: 红色
+    'map_line_color': (1.0, 0.5, 0.0, 1.0),
+    'map_completed_color': (0.0, 0.6, 1.0, 1.0),
+    'map_marker_color': (1.0, 0.0, 0.0, 1.0),
     'map_marker_size': 15,
-    'map_marker_type': 'triangle',                  # triangle / arrow
-    'map_background_color': (0.0, 0.0, 0.0, 0.0),  # 完全透明
-    'map_circle_bg_color': (0.2, 0.2, 0.2, 0.6),  # 灰色半透明背景
+    'map_marker_type': 'triangle',
+    'map_background_color': (0.0, 0.0, 0.0, 0.0),
+    'map_circle_bg_color': (0.2, 0.2, 0.2, 0.6),
     'map_circle_padding_percent': 10,
     'map_margin': 0.1,
     'flip_map_vertical': False,
     'print_interval': 5,
 }
 
-# ---------- ELEVATION ----------
 DEFAULT_PARAMS_ELEVATION = {
     'elevation_width': 800,
-    'elevation_aspect_ratio': 8,    # 长宽比 宽:高
+    'elevation_aspect_ratio': 8,
     'elevation_line_width': 3,
-    'elevation_completed_color': (0.0, 0.8, 0.0, 1.0),  # RGBA: 绿色
-    'elevation_background_color': (1.0, 1.0, 1.0, 0.2),  # RGBA: 白色半透明
-    'elevation_marker_color': (1.0, 0.0, 0.0, 1.0),      # RGBA: 红色
+    'elevation_completed_color': (0.0, 0.8, 0.0, 1.0),
+    'elevation_background_color': (1.0, 1.0, 1.0, 0.2),
+    'elevation_marker_color': (1.0, 0.0, 0.0, 1.0),
     'elevation_marker_size': 12,
     'elevation_margin': 0.1,
     'print_interval': 5,
@@ -94,7 +75,6 @@ DEFAULT_PARAMS_ELEVATION = {
 
 
 def _merge_params(defaults, params_dict):
-    """合并用户参数与默认参数。"""
     merged = dict(defaults)
     if params_dict:
         merged.update(params_dict)
@@ -102,54 +82,36 @@ def _merge_params(defaults, params_dict):
 
 
 # ============================================================
-# 边界检查（图像专用，与 SPHC 的文字检查逻辑不同）
+# 边界检查
 # ============================================================
 def check_map_bounds(params, valid_gps_count, time_point_count):
-    """
-    MAP 边界/可行性检查。越界只警告，不阻断。
-    返回 warnings 列表（无问题时为空）。
-    """
     warns = []
     width = params['width']
     height = params['height']
-
     if width <= 0 or height <= 0:
         warns.append(f"MAP 画布尺寸非法: {width}x{height}")
-
     if valid_gps_count < 2:
-        # 点数不足以成线：属于数据缺失，不在这里强制报错（由调用方走降级逻辑）
         warns.append(f"MAP 有效 GPS 点不足 2 个，无法绘制轨迹 (valid={valid_gps_count})")
-
     if time_point_count <= 0:
         warns.append("MAP 插值后无有效时间点")
-
-    # 圆形背景内边距合理性
     pad = params.get('map_circle_padding_percent', 10)
     if pad < 0 or pad > 50:
-        warns.append(f"MAP map_circle_padding_percent={pad} 超出合理范围 [0,50]，轨迹背景可能异常")
-
+        warns.append(f"MAP map_circle_padding_percent={pad} 超出合理范围 [0,50]")
     return warns
 
 
 def check_elevation_bounds(params, valid_point_count, time_point_count):
-    """
-    ELEVATION 边界/可行性检查。越界只警告，不阻断。
-    """
     warns = []
     aspect = params.get('elevation_aspect_ratio', 8)
     ew = params.get('elevation_width', 800)
-
     if ew <= 0:
         warns.append(f"ELEVATION elevation_width 非法: {ew}")
     if aspect <= 0:
         warns.append(f"ELEVATION elevation_aspect_ratio 非法: {aspect}")
-
     if valid_point_count < 2:
-        warns.append(f"ELEVATION 有效海拔/距离点不足 2 个，无法绘制曲线 (valid={valid_point_count})")
-
+        warns.append(f"ELEVATION 有效海拔/距离点不足 2 个 (valid={valid_point_count})")
     if time_point_count <= 0:
         warns.append("ELEVATION 插值后无有效时间点")
-
     return warns
 
 
@@ -157,7 +119,6 @@ def check_elevation_bounds(params, valid_point_count, time_point_count):
 # 辅助函数
 # ============================================================
 def _resolve_map_paths(output_dir, output_file):
-    """MAP：解析帧目录与输出视频路径（参数 > 全局 > 默认）。"""
     global OUTPUT_DIR_MAP, OUTPUT_MOV_MAP
     if output_dir:
         frames_dir = output_dir
@@ -165,7 +126,6 @@ def _resolve_map_paths(output_dir, output_file):
         frames_dir = OUTPUT_DIR_MAP
     else:
         frames_dir = DEFAULT_FRAMES_DIR_MAP
-
     if output_file:
         video_file = output_file
     elif OUTPUT_MOV_MAP:
@@ -177,7 +137,6 @@ def _resolve_map_paths(output_dir, output_file):
 
 
 def _resolve_elevation_paths(output_dir, output_file):
-    """ELEVATION：解析帧目录与输出视频路径（参数 > 全局 > 默认）。"""
     global OUTPUT_DIR_ELEVATION, OUTPUT_MOV_ELEVATION
     if output_dir:
         frames_dir = output_dir
@@ -185,7 +144,6 @@ def _resolve_elevation_paths(output_dir, output_file):
         frames_dir = OUTPUT_DIR_ELEVATION
     else:
         frames_dir = DEFAULT_FRAMES_DIR_ELEVATION
-
     if output_file:
         video_file = output_file
     elif OUTPUT_MOV_ELEVATION:
@@ -197,7 +155,6 @@ def _resolve_elevation_paths(output_dir, output_file):
 
 
 def cleanup_frames_map(frames_dir=DEFAULT_FRAMES_DIR_MAP):
-    """清理 MAP 帧目录。"""
     if os.path.exists(frames_dir):
         shutil.rmtree(frames_dir)
         return True
@@ -205,7 +162,6 @@ def cleanup_frames_map(frames_dir=DEFAULT_FRAMES_DIR_MAP):
 
 
 def cleanup_frames_elevation(frames_dir=DEFAULT_FRAMES_DIR_ELEVATION):
-    """清理 ELEVATION 帧目录。"""
     if os.path.exists(frames_dir):
         shutil.rmtree(frames_dir)
         return True
@@ -213,10 +169,9 @@ def cleanup_frames_elevation(frames_dir=DEFAULT_FRAMES_DIR_ELEVATION):
 
 
 # ============================================================
-# FIT 数据加载与插值（自包含，从原 Alpha 复制，算法不变）
+# FIT 数据加载与插值
 # ============================================================
 def load_and_filter(fit_path, start_abs_time, end_abs_time, speed_threshold=3.0):
-    """加载 FIT 文件并过滤到指定时间范围。"""
     try:
         from fitparse import FitFile
     except ImportError:
@@ -284,13 +239,11 @@ def load_and_filter(fit_path, start_abs_time, end_abs_time, speed_threshold=3.0)
 
 
 def interpolate(data, duration_sec, fps, speed_threshold=3.0):
-    """按指定 fps 对原始数据进行线性插值。"""
     x = data['offsets']
     time_points = np.linspace(0, duration_sec, int(duration_sec * fps) + 1)
 
     is_stopped_original = data['speed'] < speed_threshold
 
-    # 速度插值 + 停车段冻结
     interp_speed = np.interp(time_points, x, data['speed'])
     stop_flags = np.zeros_like(time_points, dtype=bool)
     for i, t in enumerate(time_points):
@@ -302,10 +255,8 @@ def interpolate(data, duration_sec, fps, speed_threshold=3.0):
     interp_speed_clean = np.where(interp_speed_clean < speed_threshold, 0.0, interp_speed_clean)
 
     def interp_arr(arr):
-        # NaN->0 再转 int，避免直接 astype(int) 的未定义行为
         return np.nan_to_num(np.interp(time_points, x, arr), nan=0.0).astype(int)
 
-    # GPS 插值（仅用有效点）
     lats = data['lats']; lons = data['lons']
     valid_gps = ~(np.isnan(lats) | np.isnan(lons))
     if np.any(valid_gps):
@@ -315,7 +266,6 @@ def interpolate(data, duration_sec, fps, speed_threshold=3.0):
         interp_lats = np.full_like(time_points, np.nan)
         interp_lons = np.full_like(time_points, np.nan)
 
-    # 海拔插值
     alts = data['alts']
     valid_alt = ~np.isnan(alts)
     if np.any(valid_alt):
@@ -323,7 +273,6 @@ def interpolate(data, duration_sec, fps, speed_threshold=3.0):
     else:
         interp_alts = np.full_like(time_points, np.nan)
 
-    # 距离插值
     dists = data['dists']
     valid_dist = ~np.isnan(dists)
     if np.any(valid_dist):
@@ -347,10 +296,9 @@ def interpolate(data, duration_sec, fps, speed_threshold=3.0):
 
 
 # ============================================================
-# 坐标归一化（MAP：GPS -> 像素；ELEVATION：海拔/距离 -> 像素）
+# 坐标归一化
 # ============================================================
 def normalize_coordinates(lats, lons, params):
-    """将经纬度归一化到 [0,1]，保持纵横比。返回像素坐标 x/y 及范围。"""
     valid = ~(np.isnan(lats) | np.isnan(lons))
     valid_lats = lats[valid]
     valid_lons = lons[valid]
@@ -367,7 +315,6 @@ def normalize_coordinates(lats, lons, params):
     height = params['height']
     video_aspect = width / height
 
-    # 按纵横比调整边界
     if (lon_range / lat_range) > video_aspect:
         lat_margin = (lon_range / video_aspect - lat_range) / 2
         min_lat -= lat_margin; max_lat += lat_margin
@@ -402,7 +349,6 @@ def normalize_coordinates(lats, lons, params):
 
 
 def normalize_elevation_by_distance(alts, dists, params):
-    """将海拔/距离归一化到 [0,1]。返回像素坐标 x/y 及范围。"""
     valid = ~(np.isnan(alts) | np.isnan(dists))
     valid_alts = alts[valid]
     valid_dists = dists[valid]
@@ -436,10 +382,9 @@ def normalize_elevation_by_distance(alts, dists, params):
 
 
 # ============================================================
-# 圆形背景（MAP）
+# 圆形背景
 # ============================================================
 def create_perfect_circular_background(pixel_x, pixel_y, width, height, padding_percent=10):
-    """计算轨迹的最小外接圆，并将轨迹缩放居中到画布。"""
     valid = [(x, y) for x, y in zip(pixel_x, pixel_y) if not (np.isnan(x) or np.isnan(y))]
     if not valid:
         return None, None, None, 1.0, (pixel_x, pixel_y)
@@ -449,7 +394,6 @@ def create_perfect_circular_background(pixel_x, pixel_y, width, height, padding_
         import cv2
         (cx, cy), radius = cv2.minEnclosingCircle(pts)
     except ImportError:
-        # 无 cv2 时的退化实现：用边界框中心与半径
         cx = (pts[:, 0].min() + pts[:, 0].max()) / 2
         cy = (pts[:, 1].min() + pts[:, 1].max()) / 2
         radius = max(pts[:, 0].max() - pts[:, 0].min(), pts[:, 1].max() - pts[:, 1].min()) / 2
@@ -474,15 +418,14 @@ def create_perfect_circular_background(pixel_x, pixel_y, width, height, padding_
 
 
 def calculate_moving_direction(pixel_x, pixel_y, idx, look_ahead=5):
-    """计算移动方向角（弧度）。"""
     if idx < 1 or idx >= len(pixel_x) - 1:
         return 0.0
     s = max(0, idx - look_ahead)
     e = min(len(pixel_x) - 1, idx + look_ahead)
-    wx = pixel_x[s:e + 1]; wy = pixel_y[s:e + 1]
-    mask = [not (np.isnan(x) or np.isnan(y)) for x, y in zip(wx, wy)]
-    vx = [wx[i] for i, m in enumerate(mask) if m]
-    vy = [wy[i] for i, m in enumerate(mask) if m]
+    vx = pixel_x[s:e + 1]; vy = pixel_y[s:e + 1]
+    mask = [not (np.isnan(x) or np.isnan(y)) for x, y in zip(vx, vy)]
+    vx = [vx[i] for i, m in enumerate(mask) if m]
+    vy = [vy[i] for i, m in enumerate(mask) if m]
     if len(vx) < 2:
         return 0.0
     dx = vx[-1] - vx[0]; dy = vy[-1] - vy[0]
@@ -492,9 +435,9 @@ def calculate_moving_direction(pixel_x, pixel_y, idx, look_ahead=5):
 
 
 # ============================================================
-# 渲染：MAP
+# 渲染：MAP（支持 stop_event）
 # ============================================================
-def render_map_frames(data_intp, params, frames_dir):
+def render_map_frames(data_intp, params, frames_dir, stop_event=None):
     os.makedirs(frames_dir, exist_ok=True)
     for f in os.listdir(frames_dir):
         if f.startswith("frame_map_"):
@@ -504,13 +447,11 @@ def render_map_frames(data_intp, params, frames_dir):
     height = params['height']
     print_interval = params['print_interval']
 
-    # 归一化坐标
     px, py, *_ = normalize_coordinates(data_intp['lats'], data_intp['lons'], params)
     if px is None:
         print("[Alpha_MAP] ⚠️ 无有效 GPS 数据，无法渲染地图帧")
         return 0
 
-    # 圆形背景变换
     tcx, tcy, radius, _, transformed = create_perfect_circular_background(
         px.tolist(), py.tolist(), width, height, params['map_circle_padding_percent'])
     if tcx is None:
@@ -553,8 +494,14 @@ def render_map_frames(data_intp, params, frames_dir):
     start_time = time.time(); last_print = start_time
     completed_x, completed_y = [], []
     angle_history = []
+    rendered = 0
 
     for idx in range(frame_count):
+        # ★ 每帧检查停止信号
+        if stop_event is not None and stop_event.is_set():
+            print("[Alpha_MAP] ⚠️ 检测到停止请求，渲染中止")
+            break
+
         now = time.time()
         if now - last_print >= print_interval:
             elapsed = now - start_time; processed = idx + 1
@@ -587,16 +534,17 @@ def render_map_frames(data_intp, params, frames_dir):
 
         fig.savefig(os.path.join(frames_dir, f"frame_map_{idx:06d}.png"),
                     dpi=100, pad_inches=0, transparent=True)
+        rendered += 1
 
     plt.close(fig)
-    print(f"[Alpha_Map] [渲染] 完成，共 {frame_count} 帧")
-    return frame_count
+    print(f"[Alpha_Map] [渲染] 已生成 {rendered}/{frame_count} 帧")
+    return rendered
 
 
 # ============================================================
-# 渲染：ELEVATION
+# 渲染：ELEVATION（支持 stop_event）
 # ============================================================
-def render_elevation_frames(data_intp, params, frames_dir, dists):
+def render_elevation_frames(data_intp, params, frames_dir, dists, stop_event=None):
     os.makedirs(frames_dir, exist_ok=True)
     for f in os.listdir(frames_dir):
         if f.startswith("frame_elevation_"):
@@ -636,13 +584,18 @@ def render_elevation_frames(data_intp, params, frames_dir, dists):
     start_time = time.time(); last_print = start_time
     completed_x, completed_y = [], []
     drawn_idx = 0
+    rendered = 0
 
-    # 预计算有效点索引（按距离递增）
     valid_indices = [i for i in range(frame_count)
                     if i < len(dists) and not np.isnan(dists[i])
                     and not np.isnan(px[i]) and not np.isnan(py[i])]
 
     for idx in range(frame_count):
+        # ★ 每帧检查停止信号
+        if stop_event is not None and stop_event.is_set():
+            print("[Alpha_ELEVATION] ⚠️ 检测到停止请求，渲染中止")
+            break
+
         now = time.time()
         if now - last_print >= print_interval:
             elapsed = now - start_time; processed = idx + 1
@@ -669,17 +622,18 @@ def render_elevation_frames(data_intp, params, frames_dir, dists):
 
         fig.savefig(os.path.join(frames_dir, f"frame_elevation_{idx:06d}.png"),
                     dpi=100, pad_inches=0, transparent=True)
+        rendered += 1
 
     plt.close(fig)
-    print(f"[Alpha_Elev] [渲染] 完成，共 {frame_count} 帧")
-    return frame_count
+    print(f"[Alpha_Elev] [渲染] 已生成 {rendered}/{frame_count} 帧")
+    return rendered
 
 
 # ============================================================
-# FFmpeg 合成（通用）
+# FFmpeg 合成（支持 stop_event，可中途终止）
 # ============================================================
-def assemble_mov(frames_dir, output_file, frame_count, fps, width, height, prefix="frame_"):
-    """调用 ffmpeg 将帧序列合成为视频。"""
+def assemble_mov(frames_dir, output_file, frame_count, fps, width, height,
+                 prefix="frame_", stop_event=None):
     global FFMPEG_PATH
 
     if not os.path.exists(frames_dir):
@@ -704,27 +658,47 @@ def assemble_mov(frames_dir, output_file, frame_count, fps, width, height, prefi
     ]
 
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=3600 * 24,
-            creationflags=CREATE_NO_WINDOW)
-        if result.returncode == 0:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
+        )
+
+        while True:
+            try:
+                proc.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if stop_event is not None and stop_event.is_set():
+                    print("[Alpha_MAP/ELEVATION] ⚠️ 检测到停止请求，正在终止 ffmpeg...")
+                    proc.kill()
+                    proc.wait()
+                    if os.path.exists(output_file):
+                        os.remove(output_file)
+                        print(f"[Alpha_MAP/ELEVATION] 🗑️ 已删除不完整视频: {output_file}")
+                    print("[Alpha_MAP/ELEVATION] [合成] 已强制终止")
+                    return False
+
+        if proc.returncode == 0:
             print(f"[Alpha_MAP/ELEVATION] [合成] 成功: {output_file}")
             return True
         else:
-            print(f"[Alpha_MAP/ELEVATION] [警告] ffmpeg 返回码 {result.returncode}: {result.stderr[:500]}")
+            print(f"[Alpha_MAP/ELEVATION] [警告] ffmpeg 返回码 {proc.returncode}")
             return False
+
     except Exception as e:
         print(f"[Alpha_MAP/ELEVATION] [错误] ffmpeg 执行异常: {e}")
         return False
 
 
 # ============================================================
-# 单个模块执行：生成 frames + 合成（不做清理，清理统一在最后）
+# 单个模块执行（支持 stop_event）
 # ============================================================
 def _execute_map(fit_path, lap_start, lap_end, duration, params, fps,
-                 output_dir, output_file):
-    """执行 MAP：加载→插值→渲染→合成。返回 (success, video_path, frames_dir, warnings)。"""
+                 output_dir, output_file, stop_event=None):
     warnings = []
     params_full = _merge_params(DEFAULT_PARAMS_MAP, params)
     frames_dir, video_file = _resolve_map_paths(output_dir, output_file)
@@ -734,11 +708,9 @@ def _execute_map(fit_path, lap_start, lap_end, duration, params, fps,
             f"[Alpha_MAP] 帧目录已存在且非空: {frames_dir}\n"
             f"请先删除或调用 Alpha_map_elevation.cleanup_frames_map('{frames_dir}')")
 
-    # speed_threshold 属于内部停车判定逻辑，固定 3.0，不从外部 params 取
     raw = load_and_filter(fit_path, lap_start, lap_end)
     data_intp = interpolate(raw, duration, fps)
 
-    # 边界检查（只警告不阻断）
     warns = check_map_bounds(params_full,
                              int(np.sum(~np.isnan(data_intp['lats']))),
                              len(data_intp['lats']))
@@ -746,29 +718,33 @@ def _execute_map(fit_path, lap_start, lap_end, duration, params, fps,
         print(f"[Alpha_MAP] ⚠️ 警告: {w}")
     warnings.extend(warns)
 
-    # 数据缺失降级：GPS 有效点 < 2 → 跳过 MAP，不报错
     valid_gps = int(np.sum(~np.isnan(data_intp['lats'])))
     if valid_gps < 2:
         print("[Alpha_MAP] ℹ️ GPS 数据不足，跳过 MAP 视频生成")
-        return False, None, frames_dir, warnings
+        return False, None, frames_dir, warnings, False
 
-    frame_count = render_map_frames(data_intp, params_full, frames_dir)
+    frame_count = render_map_frames(data_intp, params_full, frames_dir, stop_event=stop_event)
+    if stop_event is not None and stop_event.is_set():
+        # ★ 渲染被中断：清理帧目录 + 半成品视频，不保留
+        print("[Alpha_MAP] 🛑 渲染被中断，清理中间文件")
+        return False, None, frames_dir, warnings, True
     if frame_count == 0:
         print("[Alpha_MAP] ❌ 未生成任何帧")
-        return False, None, frames_dir, warnings
+        return False, None, frames_dir, warnings, False
 
     success = assemble_mov(frames_dir, video_file, frame_count, fps,
-                           params_full['width'], params_full['height'], "frame_map_")
+                           params_full['width'], params_full['height'], "frame_map_",
+                           stop_event=stop_event)
+    stopped = (stop_event is not None and stop_event.is_set())
     return success and os.path.exists(video_file), \
-           video_file if success else None, frames_dir, warnings
+           video_file if success and not stopped else None, \
+           frames_dir, warnings, stopped
 
 
 def _execute_elevation(fit_path, lap_start, lap_end, duration, params, fps,
-                        output_dir, output_file):
-    """执行 ELEVATION：加载→插值→渲染→合成。"""
+                        output_dir, output_file, stop_event=None):
     warnings = []
     params_full = _merge_params(DEFAULT_PARAMS_ELEVATION, params)
-    # elevation_height 由 width / aspect_ratio 决定
     params_full.setdefault('elevation_height',
                            int(params_full['elevation_width'] / params_full['elevation_aspect_ratio']))
     frames_dir, video_file = _resolve_elevation_paths(output_dir, output_file)
@@ -778,7 +754,6 @@ def _execute_elevation(fit_path, lap_start, lap_end, duration, params, fps,
             f"[Alpha_ELEVATION] 帧目录已存在且非空: {frames_dir}\n"
             f"请先删除或调用 Alpha_map_elevation.cleanup_frames_elevation('{frames_dir}')")
 
-    # speed_threshold 属于内部停车判定逻辑，固定 3.0，不从外部 params 取
     raw = load_and_filter(fit_path, lap_start, lap_end)
     data_intp = interpolate(raw, duration, fps)
 
@@ -789,27 +764,33 @@ def _execute_elevation(fit_path, lap_start, lap_end, duration, params, fps,
         print(f"[Alpha_ELEVATION] ⚠️ 警告: {w}")
     warnings.extend(warns)
 
-    # 降级：海拔/距离有效点 < 2 → 跳过
     valid_alt = int(np.sum(~np.isnan(data_intp['alats'])))
     valid_dist = int(np.sum(~np.isnan(data_intp['dists'])))
     if valid_alt < 2 or valid_dist < 2:
         print("[Alpha_ELEVATION] ℹ️ 海拔/距离数据不足，跳过 ELEVATION 视频生成")
-        return False, None, frames_dir, warnings
+        return False, None, frames_dir, warnings, False
 
-    frame_count = render_elevation_frames(data_intp, params_full, frames_dir, data_intp['dists'])
+    frame_count = render_elevation_frames(data_intp, params_full, frames_dir,
+                                         data_intp['dists'], stop_event=stop_event)
+    if stop_event is not None and stop_event.is_set():
+        print("[Alpha_ELEVATION] 🛑 渲染被中断，清理中间文件")
+        return False, None, frames_dir, warnings, True
     if frame_count == 0:
         print("[Alpha_ELEVATION] ❌ 未生成任何帧")
-        return False, None, frames_dir, warnings
+        return False, None, frames_dir, warnings, False
 
     ew = params_full['elevation_width']
     eh = params_full['elevation_height']
-    success = assemble_mov(frames_dir, video_file, frame_count, fps, ew, eh, "frame_elevation_")
+    success = assemble_mov(frames_dir, video_file, frame_count, fps, ew, eh,
+                           "frame_elevation_", stop_event=stop_event)
+    stopped = (stop_event is not None and stop_event.is_set())
     return success and os.path.exists(video_file), \
-           video_file if success else None, frames_dir, warnings
+           video_file if success and not stopped else None, \
+           frames_dir, warnings, stopped
 
 
 # ============================================================
-# 对外 API：便捷入口（一次性调用两个，强制共用时间轴，串行 + 统一清理）
+# 对外 API：主入口（支持 stop_event）
 # ============================================================
 def generate_map_elevation_video(
     fit_path,
@@ -819,7 +800,7 @@ def generate_map_elevation_video(
     generate_elevation=True,
     map_fps=None,
     elevation_fps=None,
-    cleanup=False,                # 关键：False = 不在视频之间清理，最后统一清理
+    cleanup=False,
     map_params_dict=None,
     elevation_params_dict=None,
     ffmpeg_path=None,
@@ -827,24 +808,14 @@ def generate_map_elevation_video(
     map_output_file=None,
     elevation_output_dir=None,
     elevation_output_file=None,
+    stop_event=None,          # ★ threading.Event
 ):
     """
-    一次性生成 MAP + ELEVATION 视频。
+    一次性生成 MAP + ELEVATION 视频，支持强制结束。
 
-    两个模块强制共用同一时间轴 (lap_start, lap_end)。
-    执行顺序：MAP(生成frames+合成) → ELEVATION(生成frames+合成) → 统一清理。
-
-    参数:
-        cleanup=True  : 两个都完成后统一清理两个帧目录（CLI 用）
-        cleanup=False : 保留帧目录，由调用层统一清理（API 默认，节省等待时间）
-
-    返回:
-        dict: {
-            'map_video', 'elevation_video',
-            'frames_dir_map', 'frames_dir_elevation',
-            'warnings': [...],
-            'cleaned': True/False,
-        }
+    清理策略（stop_event 触发时）：
+      - 已完整合成成功的视频 → 保留
+      - 被中断模块的帧目录 + 半成品视频 → 清理
     """
     global FFMPEG_PATH
     if ffmpeg_path:
@@ -866,6 +837,7 @@ def generate_map_elevation_video(
         'frames_dir_elevation': None,
         'warnings': [],
         'cleaned': False,
+        'stopped': False,
     }
 
     print("\n=== [Alpha_MAP/ELEVATION] 配置参数 ===")
@@ -873,15 +845,18 @@ def generate_map_elevation_video(
     print(f"时间范围: {lap_start} → {lap_end} (时长 {duration:.1f}s)")
     print(f"MAP FPS: {map_fps}, ELEVATION FPS: {elevation_fps}")
     print(f"自动清理: {'是' if cleanup else '否'}")
+    print(f"强制停止: {'启用' if stop_event is not None else '未启用'}")
     print("===========================\n")
 
-    # -------- 阶段 1：MAP（cleanup=False 保留帧）--------
+    # -------- 阶段 1：MAP --------
+    map_stopped = False
     if generate_map:
         print("--- [Alpha_MAP] 开始 ---")
         try:
-            ok, video, fdir, warns = _execute_map(
+            ok, video, fdir, warns, map_stopped = _execute_map(
                 fit_path, lap_start, lap_end, duration,
-                map_params_dict, map_fps, map_output_dir, map_output_file)
+                map_params_dict, map_fps, map_output_dir, map_output_file,
+                stop_event=stop_event)
             result['map_video'] = video
             result['frames_dir_map'] = fdir
             result['warnings'].extend(warns)
@@ -892,15 +867,22 @@ def generate_map_elevation_video(
     else:
         print("--- [Alpha_MAP] 跳过（generate_map=False）---")
 
-    # -------- 阶段 2：ELEVATION（cleanup=False 保留帧）--------
-    if generate_elevation:
+    # ★ MAP 被中断 → 立即清理 MAP 帧目录（无论 cleanup 参数）
+    if map_stopped and result.get('frames_dir_map') and os.path.exists(result['frames_dir_map']):
+        print(f"[Alpha_MAP] 🧹 清理被中断的帧目录: {result['frames_dir_map']}")
+        cleanup_frames_map(result['frames_dir_map'])
+
+    # -------- 阶段 2：ELEVATION --------
+    elev_stopped = False
+    if generate_elevation and not (stop_event is not None and stop_event.is_set()):
         print("")
         print("--- [Alpha_ELEVATION] 开始 ---")
         try:
-            ok, video, fdir, warns = _execute_elevation(
+            ok, video, fdir, warns, elev_stopped = _execute_elevation(
                 fit_path, lap_start, lap_end, duration,
                 elevation_params_dict, elevation_fps,
-                elevation_output_dir, elevation_output_file)
+                elevation_output_dir, elevation_output_file,
+                stop_event=stop_event)
             result['elevation_video'] = video
             result['frames_dir_elevation'] = fdir
             result['warnings'].extend(warns)
@@ -909,10 +891,19 @@ def generate_map_elevation_video(
             print(f"[Alpha_ELEVATION] ❌ 错误: {e}")
             result['warnings'].append(f"ELEVATION 执行异常: {e}")
     else:
-        print("--- [Alpha_ELEVATION] 跳过（generate_elevation=False）---")
+        if stop_event is not None and stop_event.is_set():
+            print("--- [Alpha_ELEVATION] 跳过（已收到停止信号）---")
 
-    # -------- 阶段 3：最后统一清理 --------
-    if cleanup:
+    if elev_stopped and result.get('frames_dir_elevation') and os.path.exists(result['frames_dir_elevation']):
+        print(f"[Alpha_ELEVATION] 🧹 清理被中断的帧目录: {result['frames_dir_elevation']}")
+        cleanup_frames_elevation(result['frames_dir_elevation'])
+
+    # 标记是否被中断
+    if map_stopped or elev_stopped:
+        result['stopped'] = True
+
+    # -------- 阶段 3：正常完成后的统一清理（未被中断的模块）--------
+    if not result['stopped'] and cleanup:
         cleanup_start = time.time()
         if result.get('frames_dir_map') and os.path.exists(result['frames_dir_map']):
             cleanup_frames_map(result['frames_dir_map'])
@@ -925,53 +916,52 @@ def generate_map_elevation_video(
 
 
 # ============================================================
-# 对外 API：单独调用某一模块
+# 便捷入口
 # ============================================================
 def generate_map_video(fit_path, lap_start, lap_end,
                        generate_map=True, fps=None, cleanup=False,
                        params_dict=None, ffmpeg_path=None,
-                       output_dir=None, output_file=None):
-    """仅生成 MAP 视频。共用同一时间轴语义（单个模块）。"""
+                       output_dir=None, output_file=None, stop_event=None):
     if not generate_map:
-        return {'map_video': None, 'frames_dir_map': None, 'warnings': []}
+        return {'map_video': None, 'frames_dir_map': None, 'warnings': [], 'stopped': False}
     result = generate_map_elevation_video(
         fit_path, lap_start, lap_end,
         generate_map=True, generate_elevation=False,
         map_fps=fps, cleanup=cleanup,
         map_params_dict=params_dict,
         map_output_dir=output_dir, map_output_file=output_file,
-        ffmpeg_path=ffmpeg_path)
+        ffmpeg_path=ffmpeg_path, stop_event=stop_event)
     return {
         'map_video': result['map_video'],
         'frames_dir_map': result['frames_dir_map'],
         'warnings': result['warnings'],
+        'stopped': result['stopped'],
     }
 
 
 def generate_elevation_video(fit_path, lap_start, lap_end,
                              generate_elevation=True, fps=None, cleanup=False,
                              params_dict=None, ffmpeg_path=None,
-                             output_dir=None, output_file=None):
-    """仅生成 ELEVATION 视频。"""
+                             output_dir=None, output_file=None, stop_event=None):
     if not generate_elevation:
-        return {'elevation_video': None, 'frames_dir_elevation': None, 'warnings': []}
+        return {'elevation_video': None, 'frames_dir_elevation': None, 'warnings': [], 'stopped': False}
     result = generate_map_elevation_video(
         fit_path, lap_start, lap_end,
         generate_map=False, generate_elevation=True,
         elevation_fps=fps, cleanup=cleanup,
         elevation_params_dict=params_dict,
         elevation_output_dir=output_dir, elevation_output_file=output_file,
-        ffmpeg_path=ffmpeg_path)
+        ffmpeg_path=ffmpeg_path, stop_event=stop_event)
     return {
         'elevation_video': result['elevation_video'],
         'frames_dir_elevation': result['frames_dir_elevation'],
         'warnings': result['warnings'],
+        'stopped': result['stopped'],
     }
 
 
 # ============================================================
-# CLI 交互逻辑（仅在 __main__ 中执行）
-#   参考 SPHC：选文件 -> 选 Lap（一次）-> 输入参数 -> 串行生成 -> 报告 -> 清理
+# CLI（无 stop_event，保持原逻辑）
 # ============================================================
 def find_fit_files():
     paths = [".", "./data", "./fit", "./activities"]
@@ -984,7 +974,6 @@ def find_fit_files():
 
 
 def select_lap(fit_path):
-    """选择单个 Lap（起止时间）。MAP/ELEVATION 强制共用该时间轴。"""
     try:
         from fitparse import FitFile
     except ImportError:
@@ -1022,13 +1011,6 @@ def select_lap(fit_path):
 
 
 def input_int_or_quit(prompt, default, allow_zero=True):
-    """
-    读取一个整数输入，支持：
-      - 回车         : 使用 default
-      - q / Q        : 抛出 SystemExit，随时退出整个 CLI
-      - 0 (仅 allow_zero=True): 返回 0，表示"跳过该模块"
-    其他非法输入视为回车，使用 default。
-    """
     raw = input(prompt).strip().lower()
     if raw == "q":
         print("👋 已取消")
@@ -1045,10 +1027,8 @@ def input_int_or_quit(prompt, default, allow_zero=True):
 
 
 def main():
-    """CLI 入口：交互选择文件/Lap，两个模块共用时间轴，串行生成后统一清理。"""
     print("=== Alpha_MAP / Alpha_ELEVATION 视频生成 ===\n")
 
-    # 1. 选择 FIT 文件（q 退出）
     fits = find_fit_files()
     if not fits:
         print("❌ 未找到 FIT 文件（扫描了 . / ./data / ./fit / ./activities）")
@@ -1068,13 +1048,11 @@ def main():
         return
     fit_path = fits[file_no - 1]
 
-    # 2. 选择单个 Lap（MAP 与 ELEVATION 强制共用此时间轴，q 退出）
     lap = select_lap(fit_path)
     if lap[0] is None:
         return
     lap_start, lap_end = lap
 
-    # 3. 帧率输入：直接问帧率，输入 0 = 跳过该模块，回车 = 使用默认值，q = 退出
     map_fps = input_int_or_quit(
         f"MAP 帧率 (0=跳过, 回车默认{MAP_DEFAULT_FPS}, q退出): ",
         default=MAP_DEFAULT_FPS)
@@ -1088,7 +1066,6 @@ def main():
         print("ℹ️ 两个模块的帧率都为 0，无需生成任何视频")
         return
 
-    # 4. CLI 模式：帧目录若存在则覆盖清理（先清理再调，避免 FileExistsError）
     for d in (DEFAULT_FRAMES_DIR_MAP, DEFAULT_FRAMES_DIR_ELEVATION):
         if os.path.exists(d):
             print(f"[Alpha_MAP/ELEVATION] 检测到已存在帧目录 {d}，CLI 模式将覆盖清理")
@@ -1097,8 +1074,6 @@ def main():
             else:
                 cleanup_frames_elevation(d)
 
-    # 5. 执行（CLI 模式 cleanup=True，全部完成后统一清理）
-    #    跳过的模块 fps 传 None（内部使用默认值），避免传 0 导致无帧
     total_start = time.time()
     try:
         result = generate_map_elevation_video(
@@ -1113,7 +1088,6 @@ def main():
         return
     total_elapsed = time.time() - total_start
 
-    # 6. 报告结果（带模块前缀）
     minutes, seconds = divmod(int(total_elapsed), 60)
     print("")
     if result.get('map_video'):
@@ -1121,10 +1095,9 @@ def main():
     if result.get('elevation_video'):
         print(f"[Alpha_ELEVATION] ✅ 视频生成完成: {result['elevation_video']}")
     if not result.get('map_video') and not result.get('elevation_video'):
-        print("\n[Alpha_MAP/ELEVATION] ❌ 未生成任何视频（可能数据缺失）")
+        print("\n[Alpha_MAP/ELEVATION] ❌ 未生成任何视频（可能数据缺失或被中断）")
     print(f"[Alpha_MAP/ELEVATION] ⏱️ 总用时: {minutes}分{seconds}秒 ({total_elapsed:.2f}s)")
 
-    # 清理计时（cleanup=True 时已在函数内统一清理并打印，此处无兜底需要）
     for w in result.get('warnings', []):
         print(f"[Alpha_MAP/ELEVATION] ⚠️ {w}")
 

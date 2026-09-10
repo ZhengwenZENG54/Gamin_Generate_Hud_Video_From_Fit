@@ -3,9 +3,10 @@
 Delta_elevation.py
 ==================
 Delta 模块：海拔 / 坡度 / 累计爬升 HUD 视频（1Hz FIT · 长坡修复版）
+★ 已加入 stop_event 强制结束支持（与 Alpha/Beta/Gamma 一致）
 
-与 Alpha/Beta/Gamma 一致的调用接口：
-  generate_delta_elevation_video(fit_path, lap_start, lap_end, ...)
+调用接口：
+  generate_delta_elevation_video(fit_path, lap_start, lap_end, stop_event=None, ...)
 """
 
 import os
@@ -221,7 +222,8 @@ def _compute_cumulative_gain(alts_smooth, dists, min_height_m, min_dist_m):
         total_dist = 0.0
 
     if total_rise < min_height_m or total_dist < min_dist_m:
-        print(f"  [Delta] 有效性过滤: 爬升{total_rise:.1f}m < {min_height_m}m 或 距离{total_dist:.1f}m < {min_dist_m}m，累计置0")
+        print(f"  [Delta] 有效性过滤: 爬升{total_rise:.1f}m < {min_height_m}m 或 "
+              f"距离{total_dist:.1f}m < {min_dist_m}m，累计置0")
         return np.zeros(n)
     return gain
 
@@ -278,7 +280,8 @@ def _format_gain(val):
     return "Gain:    ---- m" if np.isnan(val) else f"Gain: {val:>6.1f} m"
 
 
-def _render_delta_frames(alts_weak, gradients, gains, params, frames_dir):
+def _render_delta_frames(alts_weak, gradients, gains, params, frames_dir, stop_event=None):
+    """渲染帧，每帧检查 stop_event；触发则返回已渲染帧数"""
     print(f"[Delta] [步骤5/6] 渲染帧...")
     os.makedirs(frames_dir, exist_ok=True)
     for f in os.listdir(frames_dir):
@@ -319,6 +322,11 @@ def _render_delta_frames(alts_weak, gradients, gains, params, frames_dir):
     last_print = start_time
 
     for idx in range(n):
+        # ★ 每帧检查停止信号
+        if stop_event is not None and stop_event.is_set():
+            print(f"[Delta] ⚠️ 检测到停止请求，渲染中止 ({idx}/{n})")
+            return idx
+
         current = time.time()
         if current - last_print >= print_interval:
             elapsed = current - start_time
@@ -345,8 +353,18 @@ def _render_delta_frames(alts_weak, gradients, gains, params, frames_dir):
     return n
 
 
-def _assemble_delta_mov(frames_dir, output_file, frame_count, fps, width, height, prefix="frame_"):
+def _assemble_delta_mov(frames_dir, output_file, frame_count, fps, width, height,
+                        prefix="frame_", stop_event=None):
+    """ffmpeg 合成，支持 stop_event 中途终止并清理半成品"""
     global FFMPEG_PATH
+    if frame_count == 0:
+        return False
+
+    # ★ 合成前检查
+    if stop_event is not None and stop_event.is_set():
+        print("[Delta] ⚠️ 检测到停止请求，跳过合成")
+        return False
+
     print(f"[Delta] [步骤6/6] 合成视频: {output_file}")
     input_pattern = os.path.join(frames_dir, f"{prefix}%06d.png")
     vf_filter = f"scale={width}:{height},setsar=1"
@@ -365,24 +383,50 @@ def _assemble_delta_mov(frames_dir, output_file, frame_count, fps, width, height
     ]
 
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=3600 * 24,
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
             creationflags=CREATE_NO_WINDOW,
         )
-        if result.returncode == 0:
-            print(f"[Delta] ✅ 合成成功: {output_file}")
-            return True
-        else:
-            print(f"[Delta] ❌ ffmpeg 失败: {result.stderr[:500]}")
-            return False
     except Exception as e:
-        print(f"[Delta] ❌ ffmpeg 异常: {e}")
+        print(f"[Delta] ❌ 启动 ffmpeg 失败: {e}")
+        return False
+
+    # ★ Popen 轮询 + stop_event 检查
+    while proc.poll() is None:
+        try:
+            proc.wait(timeout=0.5)
+            break
+        except subprocess.TimeoutExpired:
+            if stop_event is not None and stop_event.is_set():
+                print("[Delta] ⚠️ 检测到停止请求，正在终止 ffmpeg...")
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                # 清理半成品视频
+                if os.path.exists(output_file):
+                    os.remove(output_file)
+                    print(f"[Delta] 🗑️ 已删除不完整视频: {output_file}")
+                return False
+
+    _, err = proc.communicate()
+    if proc.returncode == 0:
+        print(f"[Delta] ✅ 合成成功: {output_file}")
+        return True
+    else:
+        print(f"[Delta] ❌ ffmpeg 失败: {(err or '')[:500]}")
         return False
 
 
 # ============================================================
-# 主入口：供 Call 代码调用
+# 主入口：供 Call 代码调用（★ 新增 stop_event）
 # ============================================================
 def generate_delta_elevation_video(
     fit_path,
@@ -395,28 +439,13 @@ def generate_delta_elevation_video(
     ffmpeg_path=None,
     output_dir=None,
     output_file=None,
+    stop_event=None,          # ★ threading.Event；None = 不启用强制结束
 ):
     """
     生成 Delta 海拔/坡度/爬升 HUD 视频。
 
-    参数:
-        fit_path        : FIT 文件路径
-        lap_start       : Lap 绝对开始时间 (datetime)
-        lap_end         : Lap 绝对结束时间 (datetime)
-        generate_delta  : 是否生成 Delta 视频
-        fps             : 帧率，默认 DELTA_DEFAULT_FPS (5)
-        cleanup         : 合成后是否清理帧目录（API 默认 False）
-        params_dict     : 覆盖默认渲染参数
-        ffmpeg_path     : 覆盖全局 FFmpeg 路径
-        output_dir      : 自定义帧目录
-        output_file     : 自定义输出视频文件名
-
-    返回:
-        dict: {
-            'delta_elevation_video': 输出视频路径 (失败时为 None),
-            'frames_dir': 帧目录路径,
-            'warnings': [警告列表],
-        }
+    返回 dict 新增字段:
+        success, stopped, frame_count, total_time, cleanup_time
     """
     params = _merge_params(params_dict)
     if fps is None:
@@ -428,9 +457,14 @@ def generate_delta_elevation_video(
     frames_dir, video_file = _resolve_paths(output_dir, output_file)
 
     result = {
+        'success': False,
+        'stopped': False,
         'delta_elevation_video': None,
         'frames_dir': frames_dir,
+        'frame_count': 0,
         'warnings': [],
+        'total_time': 0.0,
+        'cleanup_time': None,
     }
 
     if not generate_delta:
@@ -456,8 +490,10 @@ def generate_delta_elevation_video(
     print(f"帧目录: {frames_dir}")
     print(f"输出视频: {video_file}")
     print(f"自动清理: {'是' if cleanup else '否'}")
+    print(f"强制停止: {'启用' if stop_event is not None else '未启用'}")
     print("========================\n")
 
+    t_program = time.time()
     try:
         # 1. 加载数据
         print("[Delta] [步骤1/6] 加载数据...")
@@ -505,38 +541,62 @@ def generate_delta_elevation_video(
         gradients_fps = _clip_gradient_display(intp['gradients'])
         gains_fps = intp['gains']
 
-        # 5. 渲染
+        # 5. 渲染（★ 传入 stop_event）
         print("[Delta] [步骤5/6] 渲染帧...")
-        frame_count = _render_delta_frames(alts_weak_fps, gradients_fps, gains_fps, params, frames_dir)
+        frame_count = _render_delta_frames(
+            alts_weak_fps, gradients_fps, gains_fps, params, frames_dir,
+            stop_event=stop_event,
+        )
+        result['frame_count'] = frame_count
+
+        # ★ 渲染期间被停止
+        if stop_event is not None and stop_event.is_set():
+            print("[Delta] 🛑 渲染被中断")
+            result['stopped'] = True
+            return result
 
         if frame_count == 0:
             print("[Delta] ❌ 未生成任何帧")
             return result
 
-        # 6. 合成
+        # 6. 合成（★ 传入 stop_event）
         success = _assemble_delta_mov(
             frames_dir, video_file, frame_count, fps,
             params['width'], params['height'],
+            stop_event=stop_event,
         )
+
+        # ★ 合成期间被停止
+        if stop_event is not None and stop_event.is_set():
+            result['stopped'] = True
+            return result
 
         if success and os.path.exists(video_file):
             result['delta_elevation_video'] = video_file
+            result['success'] = True
 
     except Exception as e:
         print(f"[Delta] ❌ 发生错误: {e}")
         raise
 
     finally:
-        if cleanup and os.path.exists(frames_dir):
+        result['total_time'] = time.time() - t_program
+        # ★ 停止时无条件清理帧目录；正常完成按 cleanup 参数
+        if stop_event is not None and stop_event.is_set():
+            if os.path.exists(frames_dir):
+                print(f"[Delta] 🧹 强制结束后清理帧目录: {frames_dir}")
+                cleanup_frames(frames_dir)
+        elif cleanup and os.path.exists(frames_dir):
             t0 = time.time()
             cleanup_frames(frames_dir)
-            print(f"[Delta] 🧹 已清理: {frames_dir} (用时 {time.time()-t0:.2f}s)")
+            result['cleanup_time'] = time.time() - t0
+            print(f"[Delta] 🧹 已清理: {frames_dir} (用时 {result['cleanup_time']:.2f}s)")
 
     return result
 
 
 # ============================================================
-# CLI 入口（独立运行）
+# CLI 入口（独立运行）— 不传 stop_event，行为不变
 # ============================================================
 def _find_fit_files():
     paths = [".", "./data", "./fit", "./activities"]
@@ -545,6 +605,7 @@ def _find_fit_files():
         if os.path.exists(p):
             files.extend([os.path.join(p, f) for f in os.listdir(p) if f.lower().endswith(".fit")])
     return sorted(set(files))
+
 
 def _select_laps(fit_path):
     try:
@@ -581,6 +642,7 @@ def _select_laps(fit_path):
 
     selected_indices = [n - 1 for n in selected_nums]
     return laps[min(selected_indices)][1], laps[max(selected_indices)][2]
+
 
 def main():
     print("=" * 60)
@@ -628,6 +690,7 @@ def main():
             fit_path, lap_start, lap_end,
             fps=fps,
             cleanup=True,  # CLI 自动清理
+            # stop_event=None  ← CLI 不启用
         )
     except Exception as e:
         print(f"[Delta] ❌ 运行失败: {e}")
@@ -639,6 +702,7 @@ def main():
         print(f"[Delta] ⏱️ 总用时: {total_elapsed:.2f}s")
     else:
         print(f"\n[Delta] ❌ 视频未成功生成")
+
 
 if __name__ == "__main__":
     main()

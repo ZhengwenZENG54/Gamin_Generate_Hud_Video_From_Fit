@@ -3,6 +3,8 @@
 Call_GUI.py — FIT 数据视频生成器 GUI 入口 (V3.3 左右并排双页·翻开书式)
 A页(左): 文件/目录/参数/控制栏（无滚动条，紧凑等宽）
 B页(右): 进度条 + 运行日志（仅日志）
+
+★ 已修复：统一 stop_event 结果判断 + 强制结束时清理时序修正
 """
 
 import sys
@@ -421,13 +423,13 @@ class FitVideoGeneratorApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("FIT数据视频生成器 V3.0.0")
+        self.title("FIT数据视频生成器 V3.1.0")
         self.geometry("1500x760")
         self.fit_path = None
         self.laps = []
         self.output_dir = ""
-        self._entry_widgets = []    
-        self._action_buttons = []   
+        self._entry_widgets = []
+        self._action_buttons = []
         self.sphc_params = {}
         self.map_params = {}
         self.elev_params = {}
@@ -439,9 +441,57 @@ class FitVideoGeneratorApp(tk.Tk):
         self.generation_thread = None
         self.stop_flag = threading.Event()
         self.log_queue = queue.Queue()
+        self._mod_cache = {}        # ★ 模块懒加载缓存
         self.after(80, self.process_log_queue)
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    # ============================================================
+    # ★ 模块懒加载（替代重复的 load_module_from_path）
+    # ============================================================
+    def _get_mod(self, name, path):
+        if name not in self._mod_cache:
+            self._mod_cache[name] = load_module_from_path(name, path)
+        return self._mod_cache[name]
+
+    # ============================================================
+    # ★ 统一结果判断（核心修复点）
+    # ============================================================
+    def _handle_result(self, tag, r):
+        """
+        统一收敛所有模块的返回结果:
+          - r 为 None / 非 dict : 调用异常
+          - r['stopped']=True   : 被强制结束，半成品已由模块自清理
+          - r['success']=True   : 正常完成，产物在对应 *_video key
+        各模块产物 key 不同，这里做映射收敛。
+        """
+        if not isinstance(r, dict):
+            self.log(f"{tag}: ❌ 未返回有效结果 (可能已异常)"); return
+
+        if r.get("stopped"):
+            self.log(f"{tag}: 🛑 已被强制结束，半成品已清理")
+            return
+
+        video_keys = {
+            "SPHC": ["sphc_video"],
+            "MAP":  ["map_video"],
+            "ELEV": ["elevation_video"],
+            "BETA_TIME": ["time_video"],
+            "BETA_DIST": ["distance_video"],
+            "BETA_ELEV": ["elevation_video"],
+            "GAMMA": ["gamma_video"],
+            "DELTA": ["delta_elevation_video"],
+        }.get(tag, [])
+
+        if r.get("success"):
+            paths = [r[k] for k in video_keys if r.get(k) and os.path.exists(r[k])]
+            if paths:
+                self.log(f"{tag}: ✅ 完成 -> {paths[0]}")
+            else:
+                self.log(f"{tag}: ⚠️ 标记为完成但未找到产物文件")
+        else:
+            warns = r.get("warnings") or []
+            self.log(f"{tag}: ❌ 失败 {warns[-1] if warns else ''}")
 
     def _build_ui(self):
         paned = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
@@ -480,12 +530,11 @@ class FitVideoGeneratorApp(tk.Tk):
         self._entry_widgets.append(out_entry)
         ttk.Button(of, text="浏览...", command=self.select_output_dir).pack(side=tk.RIGHT, padx=5)
 
-        # ---- Lap 选择（固定5行，超出滚动）----
+        # ---- Lap 选择 ----
         lapf = ttk.LabelFrame(mf, text="选择 Lap（所有模块共用。按 Ctrl/Shift 可多选，合成为一整个连续时间轴）", padding=5)
         lapf.pack(fill=tk.X, pady=self.GAP)
         lbf = ttk.Frame(lapf); lbf.pack(fill=tk.X)
         lap_sb = ttk.Scrollbar(lbf, orient=tk.VERTICAL)
-       
         self.lap_listbox = tk.Listbox(lbf, selectmode=tk.EXTENDED, yscrollcommand=lap_sb.set, height=5)
         lap_sb.config(command=self.lap_listbox.yview)
         lap_sb.pack(side=tk.RIGHT, fill=tk.Y)
@@ -494,28 +543,23 @@ class FitVideoGeneratorApp(tk.Tk):
         ttk.Button(bf, text="全选 Lap", command=lambda: self.lap_listbox.selection_set(0,tk.END)).pack(side=tk.LEFT, padx=5)
         ttk.Button(bf, text="取消全选 Lap", command=lambda: self.lap_listbox.selection_clear(0,tk.END)).pack(side=tk.LEFT, padx=5)
 
-        # 收集每个模块行的「可锁定控件」
         self._module_rows = []
 
-        # ---- 模块行构造：复选框 + FPS + [属性]（属性按钮统一右对齐）----
         def add_module(parent, name, var_fps, fps_default, open_cmd, var_store):
             row = ttk.Frame(parent)
             row.pack(fill=tk.X, pady=1)
-            # 复选框（固定宽度，保证各行对齐；注意 ttk.Checkbutton 不支持 anchor）
             cb = ttk.Checkbutton(row, text=name, variable=var_store, width=40)
             cb.grid(row=0, column=0, sticky=tk.W, padx=(0, 0))
-            # FPS 标签 + 输入框
             ttk.Label(row, text="FPS:").grid(row=0, column=1, padx=(8,2))
             spin = ttk.Spinbox(row, from_=1, to=120, textvariable=var_fps, width=6)
             spin.grid(row=0, column=2, padx=(0,8))
-            # 占位弹簧，把「属性」按钮推到最右 → 属性按钮同一竖线
             row.columnconfigure(3, weight=1)
             lbl = ttk.Label(row, text="（默认参数）", foreground="gray")
             lbl.grid(row=0, column=4, sticky=tk.W, padx=(0,8))
             attr_btn = ttk.Button(row, text="属性...", command=open_cmd, width=10)
             attr_btn.grid(row=0, column=5, sticky=tk.E)
-            self._action_buttons.append(attr_btn)   
-            self._module_rows.append((cb, spin))     
+            self._action_buttons.append(attr_btn)
+            self._module_rows.append((cb, spin))
             return lbl
 
         # ---- Alpha 模块 ----
@@ -539,7 +583,7 @@ class FitVideoGeneratorApp(tk.Tk):
         bf2.pack(fill=tk.X, pady=self.GAP)
         self.beta_time_var = tk.BooleanVar(value=False)
         self.beta_time_fps = tk.IntVar(value=BETA_TIME_FPS)
-        self.beta_time_lbl = add_module(bf2, "Time 时间轴", self.beta_time_fps, BETA_TIME_FPS, self.open_beta_time, self.beta_time_var)
+        self.beta_time_lbl = add_module(bf2, "Time 当前时间（默认UTC+8）", self.beta_time_fps, BETA_TIME_FPS, self.open_beta_time, self.beta_time_var)
         self.beta_time_fps.trace_add("write", lambda *a: self._update_label(self.beta_time_lbl, "Time", self.beta_time_fps))
         self.beta_dist_var = tk.BooleanVar(value=False)
         self.beta_dist_fps = tk.IntVar(value=BETA_DISTANCE_FPS)
@@ -551,11 +595,12 @@ class FitVideoGeneratorApp(tk.Tk):
         self.beta_elev_fps.trace_add("write", lambda *a: self._update_label(self.beta_elev_lbl, "Elev", self.beta_elev_fps))
 
         # ---- Gamma 模块 ----
+        gamma_default_ftp = GammaParamsDialog._load_defaults().get('ftp', 250)
         gf = ttk.LabelFrame(mf, text="Gamma 模块", padding=5)
         gf.pack(fill=tk.X, pady=self.GAP)
         self.gamma_var = tk.BooleanVar(value=False)
         self.gamma_fps = tk.IntVar(value=GAMMA_FPS)
-        self.gamma_lbl = add_module(gf, "训练指标 NP/AP/IF/VI/TSS（默认FTP 250W）", self.gamma_fps, GAMMA_FPS, self.open_gamma, self.gamma_var)
+        self.gamma_lbl = add_module(gf, f"训练指标 NP/AP/IF/VI/TSS（默认FTP {gamma_default_ftp}W）", self.gamma_fps, GAMMA_FPS, self.open_gamma, self.gamma_var)
         self.gamma_fps.trace_add("write", lambda *a: self._update_label(self.gamma_lbl, "Gamma", self.gamma_fps))
 
         # ---- Delta 模块 ----
@@ -569,7 +614,6 @@ class FitVideoGeneratorApp(tk.Tk):
         # ---- 控制栏 ----
         ctrl = ttk.LabelFrame(mf, text="运行控制", padding=6)
         ctrl.pack(fill=tk.X, pady=(8, 2))
-        # 第一行：开始/停止/清空日志
         row1 = ttk.Frame(ctrl); row1.pack(fill=tk.X)
         self.run_btn = tk.Button(row1, text="▶ 开始生成", command=self.start,
                                 bg="#4CAF50", fg="white", font=("Arial",10,"bold"), padx=12)
@@ -580,25 +624,21 @@ class FitVideoGeneratorApp(tk.Tk):
         self.clear_log_btn = tk.Button(row1, text="🗑 清空日志", command=self.clear_log,
                                        bg="#607D8B", fg="white", font=("Arial",10,"bold"), padx=12)
         self.clear_log_btn.pack(side=tk.LEFT, padx=5)
-       
         row2 = ttk.Frame(ctrl); row2.pack(fill=tk.X, pady=(6,0))
-        sel_all = ttk.Button(row2, text="☑ 全选所有视频 (8个)", command=self.select_all_modules)
+        sel_all = ttk.Button(row2, text="☑ 全选所有视频", command=self.select_all_modules)
         sel_all.pack(side=tk.LEFT, padx=5)
         sel_none = ttk.Button(row2, text="☐ 取消全选", command=self.deselect_all_modules)
         sel_none.pack(side=tk.LEFT, padx=5)
-        self._action_buttons.extend([sel_all, sel_none])  
-        
-    # ---------------- 赞助商标识区域（放在 B 页最顶部） ----------------
+        self._action_buttons.extend([sel_all, sel_none])
+
+    # ---------------- 赞助商区域 ----------------
     def _build_sponsor_area(self, parent):
         image_frame = ttk.LabelFrame(parent, text="赞助商", padding=5)
         image_frame.pack(fill=tk.X, pady=(8, 2))
-
         self.sponsor_left_margin = 250
         self.sponsor_spacing = 100
-
         inner_frame = ttk.Frame(image_frame)
         inner_frame.pack(side=tk.LEFT, padx=(self.sponsor_left_margin, 0), fill=tk.X, expand=True)
-
         self.image_label1 = ttk.Label(inner_frame)
         self.image_label1.pack(side=tk.LEFT, padx=(0, self.sponsor_spacing // 2))
         self.image_label2 = ttk.Label(inner_frame)
@@ -606,26 +646,18 @@ class FitVideoGeneratorApp(tk.Tk):
         self.load_logos()
 
     def _set_controls_state(self, locked):
-        """
-        locked=True  : 禁用（运行中，禁止修改参数）
-        locked=False : 恢复（运行结束，可再次修改）
-        """
         state = tk.DISABLED if locked else tk.NORMAL
-        # 文件 / 输出目录 Entry
         for entry in getattr(self, '_entry_widgets', []):
             try: entry.config(state=state)
             except tk.TclError: pass
-        # 各模块行的 Checkbutton + Spinbox
         for cb, spin in getattr(self, '_module_rows', []):
             try: cb.config(state=state)
             except tk.TclError: pass
             try: spin.config(state=state)
             except tk.TclError: pass
-        # 属性按钮 / 全选 / 取消全选按钮
         for btn in getattr(self, '_action_buttons', []):
             try: btn.config(state=state)
             except tk.TclError: pass
-        # Lap 列表（多选框）
         try: self.lap_listbox.config(state=state)
         except tk.TclError: pass
 
@@ -641,7 +673,6 @@ class FitVideoGeneratorApp(tk.Tk):
         except Exception as e:
             self.image_label1.config(text="Logo1 加载失败", foreground="gray")
             print(f"Logo1 加载失败: {e}")
-
         try:
             img_pil2 = Image.open(LOGO_PATH2)
             ratio2 = base_height / img_pil2.height
@@ -653,29 +684,25 @@ class FitVideoGeneratorApp(tk.Tk):
             self.image_label2.config(text="Logo2 加载失败", foreground="gray")
             print(f"Logo2 加载失败: {e}")
 
-    # ---------------- B 页：赞助商 + 进度条 + 运行日志 ----------------
+    # ---------------- B 页 ----------------
     def _build_page_b(self):
-        px = self.PADX      
+        px = self.PADX
         self._build_sponsor_area(self.page_b)
-
         prog_frame = ttk.Frame(self.page_b, padding=(px, 8, px, 0))
         prog_frame.pack(fill=tk.X)
         self.progress = ttk.Progressbar(prog_frame, mode='indeterminate')
         self.progress.pack(fill=tk.X)
-
         lf = ttk.LabelFrame(self.page_b, text="运行日志（实时输出，自动滚动到底部）", padding=5)
         lf.pack(fill=tk.BOTH, expand=True, padx=px, pady=5)
-
         self.log_text = tk.Text(lf, wrap=tk.WORD, state=tk.DISABLED, font=("Consolas", 9))
         log_sb = ttk.Scrollbar(lf, orient=tk.VERTICAL, command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=log_sb.set)
         log_sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
         self.log_status = ttk.Label(self.page_b, text="就绪 | 0 行", relief=tk.SUNKEN, anchor=tk.W)
         self.log_status.pack(fill=tk.X, padx=px, pady=(0,6))
 
-    # -------------------- 全选/取消全选模块 --------------------
+    # -------------------- 全选/取消全选 --------------------
     def select_all_modules(self):
         for v in [self.sphc_var, self.map_var, self.elev_var,
                   self.beta_time_var, self.beta_dist_var, self.beta_elev_var,
@@ -754,14 +781,22 @@ class FitVideoGeneratorApp(tk.Tk):
             messagebox.showwarning("警告","请至少勾选一个模块"); return
         self.stop_flag.clear()
         self.run_btn.config(state=tk.DISABLED); self.stop_btn.config(state=tk.NORMAL)
-        self._set_controls_state(locked=True)   
+        self._set_controls_state(locked=True)
         self.progress.start(10)
         self.generation_thread = threading.Thread(target=self._run, daemon=True)
         self.generation_thread.start()
 
     def stop(self):
-        self.stop_flag.set(); self.stop_btn.config(state=tk.DISABLED)
-        self.log("⚠️ 请求停止...")
+        if not messagebox.askyesno(
+            "确认强制结束",
+            "确定要强制结束当前任务吗？\n\n"
+            "已生成的完整视频会保留，\n"
+            "未完成的部分将被清理。"
+        ):
+            return
+        self.stop_flag.set()
+        self.stop_btn.config(state=tk.DISABLED)
+        self.log("⚠️ 强制结束中... 正在停止当前模块并清理中间文件...")
 
     # -------------------- 参数规范化 --------------------
     def _normalize_delta_params(self, params, fps):
@@ -801,126 +836,182 @@ class FitVideoGeneratorApp(tk.Tk):
         p['fps'] = fps
         return p
 
-    # -------------------- 主运行逻辑 --------------------
+    # -------------------- 主运行逻辑（★ 修复结果判断 + 清理时序）--------------------
     def _run(self):
         old = sys.stdout; sys.stdout = StdoutRedirector(self.log_queue)
         total_start = time.time()
+        was_stopped = False
         try:
             idxs = self.lap_listbox.curselection()
             laps = [self.laps[i] for i in idxs]
             t0 = min(l['start_time'] for l in laps); t1 = max(l['end_time'] for l in laps)
             ts = time.strftime('%Y%m%d_%H%M%S')
             ffmp = get_ffmpeg_path()
+            out_dir = self.out_dir_var.get()
             print(f"时间范围: {t0}~{t1}, FFmpeg: {ffmp}")
 
+            # -------- SPHC --------
             if not self.stop_flag.is_set() and self.sphc_var.get():
                 print("--- SPHC ---")
-                mod = load_module_from_path("m", MODULE_PATH_ALPHA_SPHC)
-                r = mod.generate_sphc_video(
-                    fit_path=self.fit_path, lap_start=t0, lap_end=t1,
-                    fps=self.sphc_fps.get(), cleanup=False,
-                    params_dict=self.sphc_params or None, ffmpeg_path=ffmp,
-                    output_dir=os.path.join(self.out_dir_var.get(), SPHC_FRAMES_DIR),
-                    output_file=os.path.join(self.out_dir_var.get(), f"alpha_SPHC_{ts}.mov"),
-                )
-                print(f"SPHC 完成: {r}")
+                try:
+                    mod = self._get_mod("mod_sphc", MODULE_PATH_ALPHA_SPHC)
+                    r = mod.generate_sphc_video(
+                        fit_path=self.fit_path, lap_start=t0, lap_end=t1,
+                        fps=self.sphc_fps.get(), cleanup=False,
+                        params_dict=self.sphc_params or None, ffmpeg_path=ffmp,
+                        output_dir=os.path.join(out_dir, SPHC_FRAMES_DIR),
+                        output_file=os.path.join(out_dir, f"alpha_SPHC_{ts}.mov"),
+                        stop_event=self.stop_flag,
+                    )
+                except Exception as e:
+                    self.log(f"SPHC: ❌ 异常 {e}"); traceback.print_exc(); r = None
+                self._handle_result("SPHC", r)
 
+            # -------- MAP / ELEVATION --------
             if not self.stop_flag.is_set() and (self.map_var.get() or self.elev_var.get()):
                 print("--- MAP / ELEVATION ---")
-                mod = load_module_from_path("m2", MODULE_PATH_ALPHA_MAP_ELEV)
-                r = mod.generate_map_elevation_video(
-                    fit_path=self.fit_path, lap_start=t0, lap_end=t1,
-                    generate_map=self.map_var.get(), generate_elevation=self.elev_var.get(),
-                    map_fps=self.map_fps.get(), elevation_fps=self.elev_fps.get(), cleanup=False,
-                    map_params_dict=self.map_params or None, elevation_params_dict=self.elev_params or None,
-                    ffmpeg_path=ffmp,
-                    map_output_dir=os.path.join(self.out_dir_var.get(), MAP_FRAMES_DIR),
-                    map_output_file=os.path.join(self.out_dir_var.get(), f"alpha_map_{ts}.mov"),
-                    elevation_output_dir=os.path.join(self.out_dir_var.get(), ELEVATION_FRAMES_DIR),
-                    elevation_output_file=os.path.join(self.out_dir_var.get(), f"alpha_elevation_{ts}.mov"),
-                )
-                print(f"MAP/ELEV 完成: {r}")
+                try:
+                    mod = self._get_mod("mod_me", MODULE_PATH_ALPHA_MAP_ELEV)
+                    r = mod.generate_map_elevation_video(
+                        fit_path=self.fit_path, lap_start=t0, lap_end=t1,
+                        generate_map=self.map_var.get(), generate_elevation=self.elev_var.get(),
+                        map_fps=self.map_fps.get(), elevation_fps=self.elev_fps.get(), cleanup=False,
+                        map_params_dict=self.map_params or None, elevation_params_dict=self.elev_params or None,
+                        ffmpeg_path=ffmp,
+                        map_output_dir=os.path.join(out_dir, MAP_FRAMES_DIR),
+                        map_output_file=os.path.join(out_dir, f"alpha_map_{ts}.mov"),
+                        elevation_output_dir=os.path.join(out_dir, ELEVATION_FRAMES_DIR),
+                        elevation_output_file=os.path.join(out_dir, f"alpha_elevation_{ts}.mov"),
+                        stop_event=self.stop_flag,
+                    )
+                except Exception as e:
+                    self.log(f"MAP/ELEV: ❌ 异常 {e}"); traceback.print_exc(); r = None
+                # MAP / ELEVATION 共用一个 result，分别判断
+                if isinstance(r, dict):
+                    if r.get("stopped"):
+                        self.log("MAP/ELEVATION: 🛑 已被强制结束")
+                    else:
+                        if r.get("map_video") and os.path.exists(r["map_video"]):
+                            self.log(f"MAP: ✅ 完成 -> {r['map_video']}")
+                        if r.get("elevation_video") and os.path.exists(r["elevation_video"]):
+                            self.log(f"ELEVATION: ✅ 完成 -> {r['elevation_video']}")
+                        if not (r.get("map_video") or r.get("elevation_video")):
+                            self.log("MAP/ELEVATION: ⚠️ 未生成产物")
+                else:
+                    self.log("MAP/ELEVATION: ❌ 未返回有效结果")
 
+            # -------- BETA（三次独立调用，各自传 stop_event）--------
             beta_any = (self.beta_time_var.get() or self.beta_dist_var.get() or self.beta_elev_var.get())
             if not self.stop_flag.is_set() and beta_any:
                 print("--- BETA ---")
-                mod_beta = load_module_from_path("m3", MODULE_PATH_BETA)
+                mod_beta = self._get_mod("mod_beta", MODULE_PATH_BETA)
+
                 if self.beta_time_var.get():
                     bt = self._normalize_beta_params(self.beta_time_params, self.beta_time_fps.get())
-                    r = mod_beta.generate_beta_video(
-                        fit_path=self.fit_path, lap_start=t0, lap_end=t1,
-                        generate_time=True, generate_distance=False, generate_elevation=False,
-                        time_fps=self.beta_time_fps.get(), params_dict_time=bt or None,
-                        ffmpeg_path=ffmp, output_dir=os.path.join(self.out_dir_var.get(), BETA_TIME_FRAMES_DIR),
-                        output_file_time=os.path.join(self.out_dir_var.get(), f"beta_time_{ts}.mov"), cleanup=False,
-                    )
-                    print(f"Beta Time 完成: {r}")
-                if self.beta_dist_var.get():
-                    bd = self._normalize_beta_params(self.beta_dist_params, self.beta_dist_fps.get())
-                    r = mod_beta.generate_beta_video(
-                        fit_path=self.fit_path, lap_start=t0, lap_end=t1,
-                        generate_time=False, generate_distance=True, generate_elevation=False,
-                        distance_fps=self.beta_dist_fps.get(), params_dict_distance=bd or None,
-                        ffmpeg_path=ffmp, output_dir=os.path.join(self.out_dir_var.get(), BETA_DISTANCE_FRAMES_DIR),
-                        output_file_distance=os.path.join(self.out_dir_var.get(), f"beta_dist_{ts}.mov"), cleanup=False,
-                    )
-                    print(f"Beta Distance 完成: {r}")
-                if self.beta_elev_var.get():
-                    be = self._normalize_beta_params(self.beta_elev_params, self.beta_elev_fps.get())
-                    r = mod_beta.generate_beta_video(
-                        fit_path=self.fit_path, lap_start=t0, lap_end=t1,
-                        generate_time=False, generate_distance=False, generate_elevation=True,
-                        elevation_fps=self.beta_elev_fps.get(), params_dict_elevation=be or None,
-                        ffmpeg_path=ffmp, output_dir=os.path.join(self.out_dir_var.get(), BETA_ELEVATION_FRAMES_DIR),
-                        output_file_elevation=os.path.join(self.out_dir_var.get(), f"beta_elev_{ts}.mov"), cleanup=False,
-                    )
-                    print(f"Beta Elevation 完成: {r}")
+                    try:
+                        r = mod_beta.generate_beta_video(
+                            fit_path=self.fit_path, lap_start=t0, lap_end=t1,
+                            generate_time=True, generate_distance=False, generate_elevation=False,
+                            time_fps=self.beta_time_fps.get(), params_dict_time=bt or None,
+                            ffmpeg_path=ffmp, output_dir=os.path.join(out_dir, BETA_TIME_FRAMES_DIR),
+                            output_file_time=os.path.join(out_dir, f"beta_time_{ts}.mov"), cleanup=False,
+                            stop_event=self.stop_flag,
+                        )
+                    except Exception as e:
+                        self.log(f"Beta Time: ❌ 异常 {e}"); traceback.print_exc(); r = None
+                    self._handle_result("BETA_TIME", r)
 
+                if self.beta_dist_var.get() and not self.stop_flag.is_set():
+                    bd = self._normalize_beta_params(self.beta_dist_params, self.beta_dist_fps.get())
+                    try:
+                        r = mod_beta.generate_beta_video(
+                            fit_path=self.fit_path, lap_start=t0, lap_end=t1,
+                            generate_time=False, generate_distance=True, generate_elevation=False,
+                            distance_fps=self.beta_dist_fps.get(), params_dict_distance=bd or None,
+                            ffmpeg_path=ffmp, output_dir=os.path.join(out_dir, BETA_DISTANCE_FRAMES_DIR),
+                            output_file_distance=os.path.join(out_dir, f"beta_dist_{ts}.mov"), cleanup=False,
+                            stop_event=self.stop_flag,
+                        )
+                    except Exception as e:
+                        self.log(f"Beta Distance: ❌ 异常 {e}"); traceback.print_exc(); r = None
+                    self._handle_result("BETA_DIST", r)
+
+                if self.beta_elev_var.get() and not self.stop_flag.is_set():
+                    be = self._normalize_beta_params(self.beta_elev_params, self.beta_elev_fps.get())
+                    try:
+                        r = mod_beta.generate_beta_video(
+                            fit_path=self.fit_path, lap_start=t0, lap_end=t1,
+                            generate_time=False, generate_distance=False, generate_elevation=True,
+                            elevation_fps=self.beta_elev_fps.get(), params_dict_elevation=be or None,
+                            ffmpeg_path=ffmp, output_dir=os.path.join(out_dir, BETA_ELEVATION_FRAMES_DIR),
+                            output_file_elevation=os.path.join(out_dir, f"beta_elev_{ts}.mov"), cleanup=False,
+                            stop_event=self.stop_flag,
+                        )
+                    except Exception as e:
+                        self.log(f"Beta Elevation: ❌ 异常 {e}"); traceback.print_exc(); r = None
+                    self._handle_result("BETA_ELEV", r)
+
+            # -------- GAMMA --------
             if not self.stop_flag.is_set() and self.gamma_var.get():
                 print("--- GAMMA ---")
-                mod_gamma = load_module_from_path("m4", MODULE_PATH_GAMMA)
-                gp = self._normalize_gamma_params(self.gamma_params, self.gamma_fps.get())
-                selected_nums = [i + 1 for i in idxs]
-                covered_nums = list(range(min(selected_nums), max(selected_nums) + 1))
-                r = mod_gamma.generate_gamma_metrics_video(
-                    fit_path=self.fit_path, lap_start=t0, lap_end=t1, generate_gamma=True,
-                    fps=gp.pop('fps', self.gamma_fps.get()), cleanup=False, params_dict=gp or None,
-                    ffmpeg_path=ffmp, output_dir=os.path.join(self.out_dir_var.get(), GAMMA_FRAMES_DIR),
-                    output_file=os.path.join(self.out_dir_var.get(), f"gamma_metrics_{ts}.mov"),
-                    selected_nums=selected_nums, covered_nums=covered_nums,
-                )
-                print(f"Gamma 完成: {r}")
+                try:
+                    mod_gamma = self._get_mod("mod_gamma", MODULE_PATH_GAMMA)
+                    gp = self._normalize_gamma_params(self.gamma_params, self.gamma_fps.get())
+                    selected_nums = [i + 1 for i in idxs]
+                    covered_nums = list(range(min(selected_nums), max(selected_nums) + 1))
+                    r = mod_gamma.generate_gamma_metrics_video(
+                        fit_path=self.fit_path, lap_start=t0, lap_end=t1, generate_gamma=True,
+                        fps=gp.pop('fps', self.gamma_fps.get()), cleanup=False, params_dict=gp or None,
+                        ffmpeg_path=ffmp, output_dir=os.path.join(out_dir, GAMMA_FRAMES_DIR),
+                        output_file=os.path.join(out_dir, f"gamma_metrics_{ts}.mov"),
+                        selected_nums=selected_nums, covered_nums=covered_nums,
+                        stop_event=self.stop_flag,
+                    )
+                except Exception as e:
+                    self.log(f"Gamma: ❌ 异常 {e}"); traceback.print_exc(); r = None
+                self._handle_result("GAMMA", r)
 
+            # -------- DELTA --------
             if not self.stop_flag.is_set() and self.delta_var.get():
                 print("--- DELTA ---")
-                mod_delta = load_module_from_path("m5", MODULE_PATH_DELTA)
-                dp = self._normalize_delta_params(self.delta_params, self.delta_fps.get())
-                r = mod_delta.generate_delta_elevation_video(
-                    fit_path=self.fit_path, lap_start=t0, lap_end=t1, generate_delta=True,
-                    fps=self.delta_fps.get(), cleanup=False, params_dict=dp or None,
-                    ffmpeg_path=ffmp, output_dir=os.path.join(self.out_dir_var.get(), DELTA_FRAMES_DIR),
-                    output_file=os.path.join(self.out_dir_var.get(), f"delta_elevation_{ts}.mov"),
-                )
-                print(f"Delta 完成: {r}")
+                try:
+                    mod_delta = self._get_mod("mod_delta", MODULE_PATH_DELTA)
+                    dp = self._normalize_delta_params(self.delta_params, self.delta_fps.get())
+                    r = mod_delta.generate_delta_elevation_video(
+                        fit_path=self.fit_path, lap_start=t0, lap_end=t1, generate_delta=True,
+                        fps=self.delta_fps.get(), cleanup=False, params_dict=dp or None,
+                        ffmpeg_path=ffmp, output_dir=os.path.join(out_dir, DELTA_FRAMES_DIR),
+                        output_file=os.path.join(out_dir, f"delta_elevation_{ts}.mov"),
+                        stop_event=self.stop_flag,
+                    )
+                except Exception as e:
+                    self.log(f"Delta: ❌ 异常 {e}"); traceback.print_exc(); r = None
+                self._handle_result("DELTA", r)
 
             total_elapsed = time.time() - total_start
-            print("✅ 全部完成")
-            print(f"⏱️ 生成总用时: {total_elapsed:.2f}s")
+            if self.stop_flag.is_set():
+                print(f"🛑 任务被强制结束 | 已用 {total_elapsed:.2f}s")
+            else:
+                print("✅ 全部视频生成完成")
+                print(f"⏱️ 生成总用时: {total_elapsed:.2f}s")
+
         except Exception as e:
             print(f"❌ {e}")
             traceback.print_exc()
         finally:
+            was_stopped = self.stop_flag.is_set()   # ★ 记录是否被中断
             sys.stdout = old
-            cleanup_elapsed = self._cleanup()
+            # ★ keep=True 时不清理帧目录，交给各模块自清理 + 保留完整产物
+            cleanup_elapsed = self._cleanup(keep=was_stopped)
+            if was_stopped:
+                print("🛑 强制结束：已保留完整产物，跳过 GUI 帧目录清理")
             print(f"🧹 清理总用时: {cleanup_elapsed:.2f}s")
             self.after(0, self._finish)
 
     def _selected_frame_dirs(self):
-        """返回当前勾选模块对应的帧目录名列表。"""
         dirs = []
         if self.sphc_var.get(): dirs.append(SPHC_FRAMES_DIR)
         if self.map_var.get() or self.elev_var.get():
-            # MAP / ELEVATION 共用 generate_map_elevation_video，各自独立目录
             if self.map_var.get(): dirs.append(MAP_FRAMES_DIR)
             if self.elev_var.get(): dirs.append(ELEVATION_FRAMES_DIR)
         if self.beta_time_var.get(): dirs.append(BETA_TIME_FRAMES_DIR)
@@ -930,7 +1021,14 @@ class FitVideoGeneratorApp(tk.Tk):
         if self.delta_var.get(): dirs.append(DELTA_FRAMES_DIR)
         return dirs
 
-    def _cleanup(self):
+    def _cleanup(self, keep=False):
+        """
+        keep=True  (强制结束): 不清理任何帧目录，避免误删已完成模块产物；
+                               半成品清理由各模块内部 stop_event 逻辑负责。
+        keep=False (正常完成): 清理当前勾选模块的帧目录。
+        """
+        if keep:
+            return 0.0
         import shutil
         t0 = time.time(); cleaned = 0
         expected = self._selected_frame_dirs()
@@ -948,9 +1046,9 @@ class FitVideoGeneratorApp(tk.Tk):
         self.progress.stop()
         self.run_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
-        self._set_controls_state(locked=False)  
+        self._set_controls_state(locked=False)
 
-    # -------------------- Lap 加载--------------------
+    # -------------------- Lap 加载 --------------------
     def select_fit_file(self):
         p = filedialog.askopenfilename(filetypes=[("FIT","*.fit")])
         if p: self.file_var.set(p)
@@ -974,7 +1072,6 @@ class FitVideoGeneratorApp(tk.Tk):
                     trigger = vals.get("lap_trigger")
                     if start_time is not None and elapsed is not None:
                         end_time = start_time + timedelta(seconds=elapsed)
-                        end_str = end_time.strftime("%Y-%m-%d %H:%M:%S") + f".{int(end_time.microsecond/100000)}"
                         self.laps.append({
                             'start_time': start_time,
                             'end_time': end_time,
@@ -984,8 +1081,7 @@ class FitVideoGeneratorApp(tk.Tk):
                 self.lap_listbox.delete(0, tk.END)
                 for i, l in enumerate(self.laps):
                     text = (f"[Lap {i+1}] start={l['start_time']:%Y-%m-%d %H:%M:%S}, "
-                            f"end={l['end_time']:%Y-%m-%d %H:%M:%S}."
-                            f"{int(l['end_time'].microsecond/100000)}, "
+                            f"end={l['end_time']:%Y-%m-%d %H:%M:%S}, "
                             f"elapsed={l['elapsed']:.1f}s, trigger={l['trigger']}")
                     self.lap_listbox.insert(tk.END, text)
             except Exception as e:

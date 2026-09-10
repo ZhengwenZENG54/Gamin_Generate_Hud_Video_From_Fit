@@ -3,6 +3,7 @@
 Alpha_SPHC.py
 =============
 Alpha 模块的 SPHC 子模块（Speed / Power / HR / Cadence）。
+支持 stop_event 强制结束：点击强制停止后，立即中断帧渲染或 ffmpeg 合成，并清理中间文件。
 """
 
 import os
@@ -263,9 +264,9 @@ def format_value(value, value_type, speed_threshold=3.0):
 
 
 # ============================================================
-# 渲染
+# 渲染（支持 stop_event）
 # ============================================================
-def render_sphc_frames(data_intp, params, frames_dir):
+def render_sphc_frames(data_intp, params, frames_dir, stop_event=None):
     os.makedirs(frames_dir, exist_ok=True)
     for f in os.listdir(frames_dir):
         if f.startswith("frame_"):
@@ -310,8 +311,14 @@ def render_sphc_frames(data_intp, params, frames_dir):
 
     start_time = time.time()
     last_print_time = start_time
+    rendered = 0
 
     for idx in range(frame_count):
+        # ★ 每帧渲染前检查停止信号
+        if stop_event is not None and stop_event.is_set():
+            print("[Alpha_SPHC] ⚠️ 检测到停止请求，渲染中止")
+            break
+
         current_time = time.time()
         if current_time - last_print_time >= print_interval:
             elapsed = current_time - start_time
@@ -339,16 +346,18 @@ def render_sphc_frames(data_intp, params, frames_dir):
 
         path = os.path.join(frames_dir, f"frame_{idx:06d}.png")
         fig.savefig(path, dpi=100, pad_inches=0, transparent=True)
+        rendered += 1
 
     plt.close(fig)
-    print(f"[Alpha_SPHC] [渲染] 完成，共 {frame_count} 帧")
-    return frame_count
+    print(f"[Alpha_SPHC] [渲染] 已生成 {rendered}/{frame_count} 帧")
+    return rendered
 
 
 # ============================================================
-# FFmpeg 合成
+# FFmpeg 合成（支持 stop_event，可中途终止）
 # ============================================================
-def assemble_sphc_mov(frames_dir, output_file, frame_count, fps, width, height, prefix="frame_"):
+def assemble_sphc_mov(frames_dir, output_file, frame_count, fps, width, height,
+                      prefix="frame_", stop_event=None):
     global FFMPEG_PATH
 
     if not os.path.exists(frames_dir):
@@ -373,24 +382,45 @@ def assemble_sphc_mov(frames_dir, output_file, frame_count, fps, width, height, 
     ]
 
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=3600 * 24,
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             creationflags=CREATE_NO_WINDOW,
         )
-        if result.returncode == 0:
+
+        while True:
+            try:
+                proc.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if stop_event is not None and stop_event.is_set():
+                    print("[Alpha_SPHC] ⚠️ 检测到停止请求，正在终止 ffmpeg...")
+                    proc.kill()
+                    proc.wait()
+                    # 删除可能不完整的视频文件
+                    if os.path.exists(output_file):
+                        os.remove(output_file)
+                        print(f"[Alpha_SPHC] 🗑️ 已删除不完整视频: {output_file}")
+                    print("[Alpha_SPHC] [合成] 已强制终止")
+                    return False
+
+        if proc.returncode == 0:
             print(f"[Alpha_SPHC] [合成] 成功: {output_file}")
             return True
         else:
-            print(f"[Alpha_SPHC] [警告] ffmpeg 返回码 {result.returncode}: {result.stderr[:500]}")
+            print(f"[Alpha_SPHC] [警告] ffmpeg 返回码 {proc.returncode}")
             return False
+
     except Exception as e:
         print(f"[Alpha_SPHC] [错误] ffmpeg 执行异常: {e}")
         return False
 
 
 # ============================================================
-# 主入口：供 Call 代码调用
+# 主入口：供 Call 代码调用（支持 stop_event）
 # ============================================================
 def generate_sphc_video(
     fit_path,
@@ -403,6 +433,7 @@ def generate_sphc_video(
     ffmpeg_path=None,
     output_dir=None,
     output_file=None,
+    stop_event=None,          # ★ 新增：threading.Event 对象
 ):
     params = _merge_params(params_dict)
     if fps is None:
@@ -417,6 +448,7 @@ def generate_sphc_video(
         'sphc_video': None,
         'frames_dir': frames_dir,
         'warnings': [],
+        'stopped': False,       # ★ 新增：标记是否被强制结束
     }
 
     warns = check_layout_bounds(params)
@@ -448,6 +480,7 @@ def generate_sphc_video(
     print(f"帧目录: {frames_dir}")
     print(f"输出视频: {video_file}")
     print(f"自动清理: {'是' if cleanup else '否'}")
+    print(f"强制停止: {'启用' if stop_event is not None else '未启用'}")
     print("===========================\n")
 
     try:
@@ -458,26 +491,42 @@ def generate_sphc_video(
         data_intp = interpolate(raw, duration, fps, params['speed_threshold'])
 
         print("[Alpha_SPHC] [步骤3/3] 渲染帧...")
-        frame_count = render_sphc_frames(data_intp, params, frames_dir)
+        frame_count = render_sphc_frames(data_intp, params, frames_dir, stop_event=stop_event)
 
-        if frame_count == 0:
+        # ★ 渲染期间被停止
+        if stop_event is not None and stop_event.is_set():
+            print("[Alpha_SPHC] 🛑 已停止，跳过视频合成")
+            result['stopped'] = True
+        elif frame_count == 0:
             print("[Alpha_SPHC] ❌ 未生成任何帧")
-            return result
+        else:
+            success = assemble_sphc_mov(
+                frames_dir, video_file, frame_count, fps,
+                params['width'], params['height'],
+                stop_event=stop_event,
+            )
 
-        success = assemble_sphc_mov(
-            frames_dir, video_file, frame_count, fps,
-            params['width'], params['height'],
-        )
-
-        if success and os.path.exists(video_file):
-            result['sphc_video'] = video_file
+            # ★ 合成期间被停止
+            if not success and stop_event is not None and stop_event.is_set():
+                result['stopped'] = True
+            elif success and os.path.exists(video_file):
+                result['sphc_video'] = video_file
 
     except Exception as e:
         print(f"[Alpha_SPHC] ❌ 发生错误: {e}")
         raise
 
     finally:
-        if cleanup and os.path.exists(frames_dir):
+        # 停止时无条件清理；正常情况下按 cleanup 参数清理
+        if stop_event is not None and stop_event.is_set():
+            print("[Alpha_SPHC] 🧹 强制结束后清理中间文件...")
+            if os.path.exists(frames_dir):
+                cleanup_frames(frames_dir)
+                print(f"[Alpha_SPHC] 🧹 已删除帧目录: {frames_dir}")
+            if video_file and os.path.exists(video_file):
+                os.remove(video_file)
+                print(f"[Alpha_SPHC] 🧹 已删除半成品视频: {video_file}")
+        elif cleanup and os.path.exists(frames_dir):
             t0 = time.time()
             cleanup_frames(frames_dir)
             print(f"[Alpha_SPHC] 🧹 已清理: {frames_dir} (用时 {time.time()-t0:.2f}s)")
