@@ -1,12 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Call_GUI.py — FIT 数据视频生成器 GUI 入口 (V3.3 左右并排双页·翻开书式)
-A页(左): 文件/目录/参数/控制栏（无滚动条，紧凑等宽）
-B页(右): 进度条 + 运行日志（仅日志）
-
-★ 已修复：统一 stop_event 结果判断 + 强制结束时清理时序修正
-"""
-
 import sys
 import os
 import io
@@ -21,9 +12,6 @@ from tkinter import ttk, filedialog, messagebox
 from datetime import datetime, timedelta
 from PIL import Image, ImageTk
 
-# ============================================================
-# 资源路径
-# ============================================================
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
@@ -45,13 +33,8 @@ def get_ffmpeg_path():
         return local_ffmpeg
     return None
 
-# Logo 路径
 LOGO_PATH1 = resource_path("resources/2025单车行logo_Tr.png")
 LOGO_PATH2 = resource_path("resources/ZhengwenZENG_Bilibili.png")
-
-# ============================================================
-# 配置区
-# ============================================================
 MODULE_PATH_ALPHA_SPHC = resource_path("1_Alpha_SPHC.py")
 MODULE_PATH_ALPHA_MAP_ELEV = resource_path("2_Alpha_map_elevation.py")
 MODULE_PATH_BETA = resource_path("3_Beta_time_distance_elevation.py")
@@ -75,8 +58,6 @@ BETA_DISTANCE_FRAMES_DIR = "frames_Beta_DISTANCE"
 BETA_ELEVATION_FRAMES_DIR = "frames_Beta_ELEVATION"
 GAMMA_FRAMES_DIR = "frames_gamma"
 DELTA_FRAMES_DIR = "frames_Delta"
-
-# ============================================================
 
 def load_module_from_path(module_name, file_path):
     spec = importlib.util.spec_from_file_location(module_name, file_path)
@@ -115,10 +96,6 @@ def parse_color(raw, default=(255, 255, 255)):
                 return (vals[0], vals[1], vals[2], a)
     return s
 
-
-# ============================================================
-# 通用参数对话框
-# ============================================================
 class DictParamsDialog(tk.Toplevel):
     def __init__(self, master, title, param_defs, initial=None, defaults=None):
         super().__init__(master)
@@ -201,10 +178,6 @@ class DictParamsDialog(tk.Toplevel):
     def get_result(self):
         self.wait_window(); return self.result
 
-
-# ============================================================
-# 各模块参数对话框
-# ============================================================
 class SPHCParamsDialog(DictParamsDialog):
     DEFS = [
         ("画布宽度 width", "width", "int", "像素"),
@@ -413,17 +386,13 @@ class DeltaParamsDialog(DictParamsDialog):
                 'print_interval': 5.0,
             }
 
-
-# ============================================================
-# 主应用 —— 左右并排双页（翻开书式）
-# ============================================================
 class FitVideoGeneratorApp(tk.Tk):
     PADX = 10
     GAP = 2
 
     def __init__(self):
         super().__init__()
-        self.title("FIT数据视频生成器 V3.1.0")
+        self.title("FIT数据视频生成器 V3.2.0")
         self.geometry("1500x760")
         self.fit_path = None
         self.laps = []
@@ -446,25 +415,12 @@ class FitVideoGeneratorApp(tk.Tk):
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-    # ============================================================
-    # ★ 模块懒加载（替代重复的 load_module_from_path）
-    # ============================================================
     def _get_mod(self, name, path):
         if name not in self._mod_cache:
             self._mod_cache[name] = load_module_from_path(name, path)
         return self._mod_cache[name]
 
-    # ============================================================
-    # ★ 统一结果判断（核心修复点）
-    # ============================================================
     def _handle_result(self, tag, r):
-        """
-        统一收敛所有模块的返回结果:
-          - r 为 None / 非 dict : 调用异常
-          - r['stopped']=True   : 被强制结束，半成品已由模块自清理
-          - r['success']=True   : 正常完成，产物在对应 *_video key
-        各模块产物 key 不同，这里做映射收敛。
-        """
         if not isinstance(r, dict):
             self.log(f"{tag}: ❌ 未返回有效结果 (可能已异常)"); return
 
@@ -505,13 +461,11 @@ class FitVideoGeneratorApp(tk.Tk):
         paned.add(self.page_b, weight=1)
         self._build_page_b()
 
-    # ---------------- A 页 ----------------
     def _build_page_a(self):
         px = self.PADX
         mf = ttk.Frame(self.page_a, padding=(px, 6, px, 6))
         mf.pack(fill=tk.BOTH, expand=True)
 
-        # ---- FIT 文件 ----
         ff = ttk.LabelFrame(mf, text="FIT 文件", padding=5)
         ff.pack(fill=tk.X, pady=self.GAP)
         self.file_var = tk.StringVar()
@@ -521,7 +475,6 @@ class FitVideoGeneratorApp(tk.Tk):
         ttk.Button(ff, text="浏览...", command=self.select_fit_file).pack(side=tk.RIGHT, padx=5)
         self.file_var.trace_add("write", lambda *a: self.on_fit_changed())
 
-        # ---- 输出目录 ----
         of = ttk.LabelFrame(mf, text="输出目录", padding=5)
         of.pack(fill=tk.X, pady=self.GAP)
         self.out_dir_var = tk.StringVar(value=os.getcwd())
@@ -529,8 +482,7 @@ class FitVideoGeneratorApp(tk.Tk):
         out_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self._entry_widgets.append(out_entry)
         ttk.Button(of, text="浏览...", command=self.select_output_dir).pack(side=tk.RIGHT, padx=5)
-
-        # ---- Lap 选择 ----
+        
         lapf = ttk.LabelFrame(mf, text="选择 Lap（所有模块共用。按 Ctrl/Shift 可多选，合成为一整个连续时间轴）", padding=5)
         lapf.pack(fill=tk.X, pady=self.GAP)
         lbf = ttk.Frame(lapf); lbf.pack(fill=tk.X)
@@ -562,7 +514,6 @@ class FitVideoGeneratorApp(tk.Tk):
             self._module_rows.append((cb, spin))
             return lbl
 
-        # ---- Alpha 模块 ----
         af = ttk.LabelFrame(mf, text="Alpha 模块", padding=5)
         af.pack(fill=tk.X, pady=self.GAP)
         self.sphc_var = tk.BooleanVar(value=False)
@@ -578,12 +529,14 @@ class FitVideoGeneratorApp(tk.Tk):
         self.elev_lbl = add_module(af, "Elevation 海拔剖面轨迹", self.elev_fps, ALPHA_ELEVATION_FPS, self.open_elev, self.elev_var)
         self.elev_fps.trace_add("write", lambda *a: self._update_label(self.elev_lbl, "ELEV", self.elev_fps))
 
-        # ---- Beta 模块 ----
+        beta_default_tz = BetaTimeParamsDialog._load_defaults().get('timezone_offset', 8)
+        if beta_default_tz >= 0:beta_default_utc = f"UTC+{abs(beta_default_tz)}"
+        else:beta_default_utc = f"UTC-{abs(beta_default_tz)}"
         bf2 = ttk.LabelFrame(mf, text="Beta 模块", padding=5)
         bf2.pack(fill=tk.X, pady=self.GAP)
         self.beta_time_var = tk.BooleanVar(value=False)
         self.beta_time_fps = tk.IntVar(value=BETA_TIME_FPS)
-        self.beta_time_lbl = add_module(bf2, "Time 当前时间（默认UTC+8）", self.beta_time_fps, BETA_TIME_FPS, self.open_beta_time, self.beta_time_var)
+        self.beta_time_lbl = add_module(bf2,f"Time 当前时间（默认{beta_default_utc}）",self.beta_time_fps,BETA_TIME_FPS,self.open_beta_time,self.beta_time_var)
         self.beta_time_fps.trace_add("write", lambda *a: self._update_label(self.beta_time_lbl, "Time", self.beta_time_fps))
         self.beta_dist_var = tk.BooleanVar(value=False)
         self.beta_dist_fps = tk.IntVar(value=BETA_DISTANCE_FPS)
@@ -594,7 +547,6 @@ class FitVideoGeneratorApp(tk.Tk):
         self.beta_elev_lbl = add_module(bf2, "Elevation 当前海拔高度", self.beta_elev_fps, BETA_ELEVATION_FPS, self.open_beta_elev, self.beta_elev_var)
         self.beta_elev_fps.trace_add("write", lambda *a: self._update_label(self.beta_elev_lbl, "Elev", self.beta_elev_fps))
 
-        # ---- Gamma 模块 ----
         gamma_default_ftp = GammaParamsDialog._load_defaults().get('ftp', 250)
         gf = ttk.LabelFrame(mf, text="Gamma 模块", padding=5)
         gf.pack(fill=tk.X, pady=self.GAP)
@@ -603,7 +555,6 @@ class FitVideoGeneratorApp(tk.Tk):
         self.gamma_lbl = add_module(gf, f"训练指标 NP/AP/IF/VI/TSS（默认FTP {gamma_default_ftp}W）", self.gamma_fps, GAMMA_FPS, self.open_gamma, self.gamma_var)
         self.gamma_fps.trace_add("write", lambda *a: self._update_label(self.gamma_lbl, "Gamma", self.gamma_fps))
 
-        # ---- Delta 模块 ----
         df2 = ttk.LabelFrame(mf, text="Delta 模块", padding=5)
         df2.pack(fill=tk.X, pady=self.GAP)
         self.delta_var = tk.BooleanVar(value=False)
@@ -611,7 +562,6 @@ class FitVideoGeneratorApp(tk.Tk):
         self.delta_lbl = add_module(df2, "当前海拔高度 / 当前坡度 / 累计爬升", self.delta_fps, DELTA_FPS, self.open_delta, self.delta_var)
         self.delta_fps.trace_add("write", lambda *a: self._update_label(self.delta_lbl, "Delta", self.delta_fps))
 
-        # ---- 控制栏 ----
         ctrl = ttk.LabelFrame(mf, text="运行控制", padding=6)
         ctrl.pack(fill=tk.X, pady=(8, 2))
         row1 = ttk.Frame(ctrl); row1.pack(fill=tk.X)
@@ -631,7 +581,6 @@ class FitVideoGeneratorApp(tk.Tk):
         sel_none.pack(side=tk.LEFT, padx=5)
         self._action_buttons.extend([sel_all, sel_none])
 
-    # ---------------- 赞助商区域 ----------------
     def _build_sponsor_area(self, parent):
         image_frame = ttk.LabelFrame(parent, text="赞助商", padding=5)
         image_frame.pack(fill=tk.X, pady=(8, 2))
@@ -684,7 +633,6 @@ class FitVideoGeneratorApp(tk.Tk):
             self.image_label2.config(text="Logo2 加载失败", foreground="gray")
             print(f"Logo2 加载失败: {e}")
 
-    # ---------------- B 页 ----------------
     def _build_page_b(self):
         px = self.PADX
         self._build_sponsor_area(self.page_b)
@@ -702,7 +650,6 @@ class FitVideoGeneratorApp(tk.Tk):
         self.log_status = ttk.Label(self.page_b, text="就绪 | 0 行", relief=tk.SUNKEN, anchor=tk.W)
         self.log_status.pack(fill=tk.X, padx=px, pady=(0,6))
 
-    # -------------------- 全选/取消全选 --------------------
     def select_all_modules(self):
         for v in [self.sphc_var, self.map_var, self.elev_var,
                   self.beta_time_var, self.beta_dist_var, self.beta_elev_var,
@@ -715,14 +662,12 @@ class FitVideoGeneratorApp(tk.Tk):
                   self.gamma_var, self.delta_var]:
             v.set(False)
 
-    # -------------------- 清空日志 --------------------
     def clear_log(self):
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.delete(1.0, tk.END)
         self.log_text.configure(state=tk.DISABLED)
         self.log_status.config(text="日志已清空 | 0 行")
 
-    # -------------------- 日志队列 --------------------
     def process_log_queue(self):
         try:
             while True:
@@ -739,7 +684,6 @@ class FitVideoGeneratorApp(tk.Tk):
             pass
         self.after(80, self.process_log_queue)
 
-    # -------------------- 属性对话框 --------------------
     def _update_label(self, label, name, var):
         try:
             label.config(text=f"{name} FPS={var.get()}")
@@ -770,7 +714,6 @@ class FitVideoGeneratorApp(tk.Tk):
         d = DeltaParamsDialog(self, self.delta_params); r = d.get_result()
         if r: self.delta_params = r; self._update_label(self.delta_lbl, "Delta", self.delta_fps)
 
-    # -------------------- 运行控制 --------------------
     def start(self):
         if not self.lap_listbox.curselection():
             messagebox.showwarning("警告","请选择 Lap"); return
@@ -798,7 +741,6 @@ class FitVideoGeneratorApp(tk.Tk):
         self.stop_btn.config(state=tk.DISABLED)
         self.log("⚠️ 强制结束中... 正在停止当前模块并清理中间文件...")
 
-    # -------------------- 参数规范化 --------------------
     def _normalize_delta_params(self, params, fps):
         p = dict(params or {})
         p['fps'] = fps
@@ -836,7 +778,6 @@ class FitVideoGeneratorApp(tk.Tk):
         p['fps'] = fps
         return p
 
-    # -------------------- 主运行逻辑（★ 修复结果判断 + 清理时序）--------------------
     def _run(self):
         old = sys.stdout; sys.stdout = StdoutRedirector(self.log_queue)
         total_start = time.time()
@@ -850,7 +791,6 @@ class FitVideoGeneratorApp(tk.Tk):
             out_dir = self.out_dir_var.get()
             print(f"时间范围: {t0}~{t1}, FFmpeg: {ffmp}")
 
-            # -------- SPHC --------
             if not self.stop_flag.is_set() and self.sphc_var.get():
                 print("--- SPHC ---")
                 try:
@@ -867,7 +807,6 @@ class FitVideoGeneratorApp(tk.Tk):
                     self.log(f"SPHC: ❌ 异常 {e}"); traceback.print_exc(); r = None
                 self._handle_result("SPHC", r)
 
-            # -------- MAP / ELEVATION --------
             if not self.stop_flag.is_set() and (self.map_var.get() or self.elev_var.get()):
                 print("--- MAP / ELEVATION ---")
                 try:
@@ -886,7 +825,6 @@ class FitVideoGeneratorApp(tk.Tk):
                     )
                 except Exception as e:
                     self.log(f"MAP/ELEV: ❌ 异常 {e}"); traceback.print_exc(); r = None
-                # MAP / ELEVATION 共用一个 result，分别判断
                 if isinstance(r, dict):
                     if r.get("stopped"):
                         self.log("MAP/ELEVATION: 🛑 已被强制结束")
@@ -900,7 +838,6 @@ class FitVideoGeneratorApp(tk.Tk):
                 else:
                     self.log("MAP/ELEVATION: ❌ 未返回有效结果")
 
-            # -------- BETA（三次独立调用，各自传 stop_event）--------
             beta_any = (self.beta_time_var.get() or self.beta_dist_var.get() or self.beta_elev_var.get())
             if not self.stop_flag.is_set() and beta_any:
                 print("--- BETA ---")
@@ -951,7 +888,6 @@ class FitVideoGeneratorApp(tk.Tk):
                         self.log(f"Beta Elevation: ❌ 异常 {e}"); traceback.print_exc(); r = None
                     self._handle_result("BETA_ELEV", r)
 
-            # -------- GAMMA --------
             if not self.stop_flag.is_set() and self.gamma_var.get():
                 print("--- GAMMA ---")
                 try:
@@ -971,7 +907,6 @@ class FitVideoGeneratorApp(tk.Tk):
                     self.log(f"Gamma: ❌ 异常 {e}"); traceback.print_exc(); r = None
                 self._handle_result("GAMMA", r)
 
-            # -------- DELTA --------
             if not self.stop_flag.is_set() and self.delta_var.get():
                 print("--- DELTA ---")
                 try:
@@ -999,12 +934,11 @@ class FitVideoGeneratorApp(tk.Tk):
             print(f"❌ {e}")
             traceback.print_exc()
         finally:
-            was_stopped = self.stop_flag.is_set()   # ★ 记录是否被中断
+            was_stopped = self.stop_flag.is_set()
             sys.stdout = old
-            # ★ keep=True 时不清理帧目录，交给各模块自清理 + 保留完整产物
-            cleanup_elapsed = self._cleanup(keep=was_stopped)
+            cleanup_elapsed = self._cleanup(keep=False)
             if was_stopped:
-                print("🛑 强制结束：已保留完整产物，跳过 GUI 帧目录清理")
+                print("🛑 强制结束：已清理所有中间帧目录，视频文件保留")
             print(f"🧹 清理总用时: {cleanup_elapsed:.2f}s")
             self.after(0, self._finish)
 
@@ -1022,11 +956,6 @@ class FitVideoGeneratorApp(tk.Tk):
         return dirs
 
     def _cleanup(self, keep=False):
-        """
-        keep=True  (强制结束): 不清理任何帧目录，避免误删已完成模块产物；
-                               半成品清理由各模块内部 stop_event 逻辑负责。
-        keep=False (正常完成): 清理当前勾选模块的帧目录。
-        """
         if keep:
             return 0.0
         import shutil
@@ -1048,7 +977,6 @@ class FitVideoGeneratorApp(tk.Tk):
         self.stop_btn.config(state=tk.DISABLED)
         self._set_controls_state(locked=False)
 
-    # -------------------- Lap 加载 --------------------
     def select_fit_file(self):
         p = filedialog.askopenfilename(filetypes=[("FIT","*.fit")])
         if p: self.file_var.set(p)
@@ -1086,9 +1014,7 @@ class FitVideoGeneratorApp(tk.Tk):
                     self.lap_listbox.insert(tk.END, text)
             except Exception as e:
                 self.log(f"读取 Lap 失败: {e}")
-
     def log(self, m): self.log_queue.put(m+"\n")
-
     def on_closing(self):
         if self.generation_thread and self.generation_thread.is_alive():
             if messagebox.askyesno("确认","任务进行中，退出？"): self.destroy()

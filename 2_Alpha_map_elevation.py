@@ -633,7 +633,7 @@ def render_elevation_frames(data_intp, params, frames_dir, dists, stop_event=Non
 # FFmpeg 合成（支持 stop_event，可中途终止）
 # ============================================================
 def assemble_mov(frames_dir, output_file, frame_count, fps, width, height,
-                 prefix="frame_", stop_event=None):
+                 prefix="frame_", stop_event=None, timeout=10800):
     global FFMPEG_PATH
 
     if not os.path.exists(frames_dir):

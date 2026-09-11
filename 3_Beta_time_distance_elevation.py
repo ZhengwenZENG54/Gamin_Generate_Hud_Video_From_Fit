@@ -4,6 +4,8 @@ Beta_time_distance_elevation.py
 时间/距离/海拔 透明视频生成器（与 Alpha_SPHC 架构一致）
 支持三种视频分别根据字体大小、文本长度自动计算紧凑分辨率。
 
+★ 新增：时间视频末尾追加 (UTC±N) 时区标注
+
 用法:
   1) 单独运行 (CLI):  python Beta_time_distance_elevation.py
   2) 被 GUI 调用:     generate_beta_video(**kwargs)   <- 无 input() 阻塞
@@ -26,19 +28,19 @@ import numpy as np
 FFMPEG_PATH = "ffmpeg"
 
 DEFAULT_PARAMS_TIME = {
-    "fps": 1, "font_size": 60, "font_color": (255, 255, 255),
-    "outline_width": 3, "outline_color": (0, 0, 0),
+    "fps": 1, "font_size": 40, "font_color": (255, 255, 255),
+    "outline_width": 2, "outline_color": (0, 0, 0),
     "video_width": None, "video_height": None, "padding": 30, "timezone_offset": 8,
 }
 DEFAULT_PARAMS_DISTANCE = {
-    "fps": 5, "font_size": 50, "font_color": (255, 255, 255),
-    "outline_width": 3, "outline_color": (0, 0, 0),
+    "fps": 5, "font_size": 35, "font_color": (255, 255, 255),
+    "outline_width": 2, "outline_color": (0, 0, 0),
     "prefix": " Dist: ", "suffix": " km",
     "video_width": None, "video_height": None, "padding": 30,
 }
 DEFAULT_PARAMS_ELEVATION = {
-    "fps": 5, "font_size": 50, "font_color": (255, 255, 255),
-    "outline_width": 3, "outline_color": (0, 0, 0),
+    "fps": 5, "font_size": 35, "font_color": (255, 255, 255),
+    "outline_width": 2, "outline_color": (0, 0, 0),
     "prefix": " Elev: ", "suffix": " m",
     "video_width": None, "video_height": None, "padding": 30,
 }
@@ -50,6 +52,28 @@ BETA_ELEVATION_FRAMES = "frames_Beta_ELEVATION"
 
 PRINT_INTERVAL = 5.0
 FONT_PATH = None
+
+
+# ============================================================
+# ★ 新增：时区标签格式化（如 UTC+8 / UTC-5 / UTC+0）
+# ============================================================
+def _format_utc_label(tz_offset):
+    """
+    把时区偏移量格式化为 (UTC±N) 字符串。
+    - 整数去尾零：8 -> UTC+8（而非 UTC+8.0）
+    - 零值保护：0 -> UTC+0
+    - 支持小数：4.5 -> UTC+4.5
+    """
+    try:
+        tz = float(tz_offset)
+    except (TypeError, ValueError):
+        tz = 0.0
+    sign = "+" if tz >= 0 else "-"
+    abs_tz = abs(tz)
+    if abs_tz == int(abs_tz):
+        return f"UTC{sign}{int(abs_tz)}"
+    else:
+        return f"UTC{sign}{abs_tz}"
 
 
 # ============================================================
@@ -215,7 +239,7 @@ def generate_frames(lap_start, lap_end, fps, width, height, frame_dir,
 
 
 def compile_video(frame_dir, output_file, frame_count, width, height, fps,
-                  prefix="frame_", stop_event=None):
+                  prefix="frame_", stop_event=None, timeout=10800):
     global FFMPEG_PATH
     if frame_count == 0:
         return False
@@ -244,37 +268,42 @@ def compile_video(frame_dir, output_file, frame_count, width, height, fps,
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, creationflags=CREATE_NO_WINDOW)
+        # ★ 关键改动：stdout/stderr 重定向到 DEVNULL，不再读取管道
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                creationflags=CREATE_NO_WINDOW)
     except Exception as e:
         print(f"[Beta_合成] 启动 ffmpeg 失败: {e}")
         return False
 
+    start_time = time.time()
     while proc.poll() is None:
+        # 检查停止信号
         if stop_event and stop_event.is_set():
-            print("[Beta_合成] 检测到停止信号，终止 ffmpeg 进程...")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            try:
-                proc.communicate()
-            except Exception:
-                pass
+            print("[Beta_合成] 检测到停止信号，终止 ffmpeg...")
+            proc.kill()
+            proc.wait()
             if os.path.exists(output_file):
                 os.remove(output_file)
-                print(f"[Beta_合成] 已删除半成品视频: {output_file}")
             return False
+
+        # 超时保护
+        if time.time() - start_time > timeout:
+            print(f"[Beta_合成] 超时 {timeout}s，强制终止")
+            proc.kill()
+            proc.wait()
+            if os.path.exists(output_file):
+                os.remove(output_file)
+            return False
+
         time.sleep(0.1)
 
-    _, err = proc.communicate()
+    # 进程已结束
     if proc.returncode == 0:
         print(f"[Beta_合成] 成功: {output_file}")
         return True
     else:
-        print(f"[Beta_合成] 失败: {(err or '')[:300]}")
+        # 如果需要错误信息，可以在这里重新执行一次不带 DEVNULL 的命令来获取
+        print(f"[Beta_合成] 失败 (返回码 {proc.returncode})")
         return False
 
 
@@ -346,13 +375,19 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
         dist_font = load_font(p_dist["font_size"]) if generate_distance else None
         elev_font = load_font(p_elev["font_size"]) if generate_elevation else None
 
+        # ★ 时区标签（如 UTC+8），全局只算一次
+        tz = p_time["timezone_offset"]
+        utc_label = _format_utc_label(tz)
+        print(f"[Beta] 时区偏移: {tz}h -> {utc_label}")
+
         # ---- 分别计算三种视频尺寸 ----
         time_w = time_h = None
         dist_w = dist_h = None
         elev_w = elev_h = None
 
         if generate_time:
-            sample_time = "9999-12-31 23:59:59"
+            # ★ 样本已包含 (UTC±N)，保证画布足够宽不被裁
+            sample_time = f"9999-12-31 23:59:59 ( {utc_label} )"
             time_w, time_h = calc_video_size_for_text(
                 sample_time, time_font,
                 padding=p_time.get("padding", 30),
@@ -384,7 +419,6 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
             )
             print(f"[Beta] 海拔视频尺寸: {elev_w}x{elev_h}")
 
-        tz = p_time["timezone_offset"]
         iv_dist = None
         iv_elev = None
         if generate_distance:
@@ -392,9 +426,10 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
         if generate_elevation:
             _, iv_elev = interpolate_data(times, elevs, lap_start, lap_end, fps_e, "elevation")
 
-        dir_t = os.path.join(out_dir, BETA_TIME_FRAMES)
-        dir_d = os.path.join(out_dir, BETA_DISTANCE_FRAMES)
-        dir_e = os.path.join(out_dir, BETA_ELEVATION_FRAMES)
+        frame_dir = output_dir or os.getcwd()
+        dir_t = os.path.join(frame_dir, BETA_TIME_FRAMES)
+        dir_d = os.path.join(frame_dir, BETA_DISTANCE_FRAMES)
+        dir_e = os.path.join(frame_dir, BETA_ELEVATION_FRAMES)
 
         cnt_t = cnt_d = cnt_e = 0
         stopped = False
@@ -403,8 +438,9 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
         if generate_time and not (stop_event and stop_event.is_set()):
             cnt_t = generate_frames(
                 lap_start, lap_end, fps_t, time_w, time_h, dir_t,
+                # ★ 时间字符串后追加 (UTC±N)
                 lambda t, i: make_text_frame(
-                    (t + timedelta(hours=tz)).strftime("%Y-%m-%d %H:%M:%S"),
+                    (t + timedelta(hours=tz)).strftime("%Y-%m-%d %H:%M:%S") + f" ({utc_label})",
                     time_w, time_h, time_font, p_time["font_color"],
                     p_time["outline_width"], p_time["outline_color"]),
                 "Beta_Time", stop_event)
@@ -476,7 +512,12 @@ def generate_beta_video(fit_path, lap_start=None, lap_end=None,
                     print(f"[Beta] 已清理合成中断的海拔帧目录: {dir_e}")
 
         result["stopped"] = stopped
-        result["success"] = not stopped
+        any_success = (
+            result["time_video"] is not None or
+            result["distance_video"] is not None or
+            result["elevation_video"] is not None
+        )
+        result["success"] = any_success and not stopped
 
     except Exception as e:
         print(f"[Beta] 错误: {e}")

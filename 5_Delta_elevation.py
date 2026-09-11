@@ -64,15 +64,26 @@ def _merge_params(params_dict):
     return merged
 
 
+# ★ 防御性路径归一化（防止帧目录嵌套）—— 修复版
+def _normalize_output_dir(output_dir):
+    """仅当 output_dir 存在两层嵌套（如 frames_Delta/frames_Delta）时退回父目录"""
+    known_dirs = [DEFAULT_FRAMES_DIR]
+    if output_dir:
+        base = os.path.basename(output_dir)
+        parent = os.path.dirname(output_dir)
+        parent_base = os.path.basename(parent) if parent else ""
+        if base in known_dirs and parent_base in known_dirs:
+            print(f"[Delta] 检测到 output_dir 嵌套，自动修正为: {parent}")
+            return parent
+    return output_dir
+
+
 def _resolve_paths(output_dir, output_file):
     global OUTPUT_DIR_DELTA, OUTPUT_MOV_DELTA
 
-    if output_dir:
-        frames_dir = output_dir
-    elif OUTPUT_DIR_DELTA:
-        frames_dir = OUTPUT_DIR_DELTA
-    else:
-        frames_dir = DEFAULT_FRAMES_DIR
+    raw_dir = output_dir or OUTPUT_DIR_DELTA or DEFAULT_FRAMES_DIR
+    # ★ 应用路径归一化
+    frames_dir = _normalize_output_dir(raw_dir)
 
     if output_file:
         video_file = output_file
@@ -353,14 +364,16 @@ def _render_delta_frames(alts_weak, gradients, gains, params, frames_dir, stop_e
     return n
 
 
+# ============================================================
+# 视频合成（★ 修复：DEVNULL 代替 PIPE，消除阻塞）
+# ============================================================
 def _assemble_delta_mov(frames_dir, output_file, frame_count, fps, width, height,
-                        prefix="frame_", stop_event=None):
+                        prefix="frame_", stop_event=None, timeout=10800):
     """ffmpeg 合成，支持 stop_event 中途终止并清理半成品"""
     global FFMPEG_PATH
     if frame_count == 0:
         return False
 
-    # ★ 合成前检查
     if stop_event is not None and stop_event.is_set():
         print("[Delta] ⚠️ 检测到停止请求，跳过合成")
         return False
@@ -385,43 +398,47 @@ def _assemble_delta_mov(frames_dir, output_file, frame_count, fps, width, height
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
     try:
+        # ★ 使用 DEVNULL 丢弃 ffmpeg 输出，避免管道阻塞
         proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             creationflags=CREATE_NO_WINDOW,
         )
     except Exception as e:
         print(f"[Delta] ❌ 启动 ffmpeg 失败: {e}")
         return False
 
-    # ★ Popen 轮询 + stop_event 检查
+    start_time = time.time()
     while proc.poll() is None:
-        try:
-            proc.wait(timeout=0.5)
-            break
-        except subprocess.TimeoutExpired:
-            if stop_event is not None and stop_event.is_set():
-                print("[Delta] ⚠️ 检测到停止请求，正在终止 ffmpeg...")
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-                # 清理半成品视频
-                if os.path.exists(output_file):
-                    os.remove(output_file)
-                    print(f"[Delta] 🗑️ 已删除不完整视频: {output_file}")
-                return False
+        # 检查停止信号
+        if stop_event is not None and stop_event.is_set():
+            print("[Delta] ⚠️ 检测到停止请求，正在终止 ffmpeg...")
+            proc.kill()
+            proc.wait()
+            if os.path.exists(output_file):
+                os.remove(output_file)
+                print(f"[Delta] 🗑️ 已删除不完整视频: {output_file}")
+            return False
 
-    _, err = proc.communicate()
+        # 超时保护
+        if time.time() - start_time > timeout:
+            print(f"[Delta] ⚠️ 合成超时 {timeout}s，强制终止")
+            proc.kill()
+            proc.wait()
+            if os.path.exists(output_file):
+                os.remove(output_file)
+                print(f"[Delta] 🗑️ 已删除超时视频: {output_file}")
+            return False
+
+        time.sleep(0.1)
+
+    # ★ 进程已结束，直接检查 returncode（无需 communicate）
     if proc.returncode == 0:
         print(f"[Delta] ✅ 合成成功: {output_file}")
         return True
     else:
-        print(f"[Delta] ❌ ffmpeg 失败: {(err or '')[:500]}")
+        print(f"[Delta] ❌ ffmpeg 失败 (返回码 {proc.returncode})")
         return False
 
 
@@ -581,12 +598,8 @@ def generate_delta_elevation_video(
 
     finally:
         result['total_time'] = time.time() - t_program
-        # ★ 停止时无条件清理帧目录；正常完成按 cleanup 参数
-        if stop_event is not None and stop_event.is_set():
-            if os.path.exists(frames_dir):
-                print(f"[Delta] 🧹 强制结束后清理帧目录: {frames_dir}")
-                cleanup_frames(frames_dir)
-        elif cleanup and os.path.exists(frames_dir):
+        # ★ 清理条件统一：只依赖 cleanup 参数（与 Beta/Gamma 一致）
+        if cleanup and os.path.exists(frames_dir):
             t0 = time.time()
             cleanup_frames(frames_dir)
             result['cleanup_time'] = time.time() - t0

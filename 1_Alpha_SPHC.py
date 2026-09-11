@@ -448,7 +448,8 @@ def generate_sphc_video(
         'sphc_video': None,
         'frames_dir': frames_dir,
         'warnings': [],
-        'stopped': False,       # ★ 新增：标记是否被强制结束
+        'stopped': False,
+        'success': False,       # ★ 新增：明确初始化为 False
     }
 
     warns = check_layout_bounds(params)
@@ -511,6 +512,7 @@ def generate_sphc_video(
                 result['stopped'] = True
             elif success and os.path.exists(video_file):
                 result['sphc_video'] = video_file
+                result['success'] = True   # ★ 关键：标记成功
 
     except Exception as e:
         print(f"[Alpha_SPHC] ❌ 发生错误: {e}")

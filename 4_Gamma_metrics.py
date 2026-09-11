@@ -76,6 +76,22 @@ def _merge_params(params_dict):
 
 
 # ============================================================
+# === 路径归一化（防止帧目录嵌套）
+# ============================================================
+def _normalize_output_dir(output_dir):
+    """仅当 output_dir 存在两层嵌套（如 frames_gamma/frames_gamma）时退回父目录"""
+    known_dirs = [FRAMES_DIR]
+    if output_dir:
+        base = os.path.basename(output_dir)
+        parent = os.path.dirname(output_dir)
+        parent_base = os.path.basename(parent) if parent else ""
+        if base in known_dirs and parent_base in known_dirs:
+            print(f"[Gamma] 检测到 output_dir 嵌套，自动修正为: {parent}")
+            return parent
+    return output_dir
+
+
+# ============================================================
 # === 核心入口（与 Alpha/Beta 签名约定对齐）
 # ============================================================
 def generate_gamma_metrics_video(
@@ -121,7 +137,8 @@ def generate_gamma_metrics_video(
         params["fps"] = fps
     metrics_fps = params["fps"]
 
-    frame_dir = output_dir or FRAMES_DIR
+    # ★ 防御性路径归一化
+    frame_dir = _normalize_output_dir(output_dir) or FRAMES_DIR
 
     result = {
         "success": False,
@@ -187,12 +204,10 @@ def generate_gamma_metrics_video(
                                           stop_event=stop_event)
         result["frame_count"] = frame_count
 
+        # ★ 中断分支：只标记状态，不手动清理，交给 finally 统一处理
         if stop_event and stop_event.is_set():
             result["stopped"] = True
-            print("[Gamma] 检测到停止信号，清理帧目录...")
-            if os.path.isdir(frame_dir):
-                shutil.rmtree(frame_dir)
-                print(f"[Gamma] 已清理帧目录: {frame_dir}")
+            print("[Gamma] 检测到停止信号")
             return result
 
         if frame_count == 0:
@@ -214,12 +229,10 @@ def generate_gamma_metrics_video(
             result["success"] = True
             print(f"✅ Gamma 指标视频生成成功: {output_file}")
         else:
+            # ★ 合成失败时同样不手动清理，由 finally 决定
             if stop_event and stop_event.is_set():
                 result["stopped"] = True
-                print("[Gamma] 检测到停止信号，清理帧目录...")
-                if os.path.isdir(frame_dir):
-                    shutil.rmtree(frame_dir)
-                    print(f"[Gamma] 已清理帧目录: {frame_dir}")
+                print("[Gamma] 检测到停止信号")
             else:
                 result["warnings"].append("ffmpeg 合成失败")
 
@@ -229,7 +242,8 @@ def generate_gamma_metrics_video(
         result["warnings"].append(str(e))
     finally:
         result["total_time"] = time.time() - t_program
-        if cleanup and result.get("success") and not result.get("stopped"):
+        # ★ 清理条件简化：只要 cleanup=True 就清理，无论成功/中断/失败
+        if cleanup:
             t0 = time.time()
             if os.path.isdir(frame_dir):
                 shutil.rmtree(frame_dir)
@@ -479,7 +493,10 @@ def render_gamma_frames(metrics, duration, metrics_fps, frame_dir, params, stop_
     return num_frames
 
 
-def assemble_gamma_mov(frame_dir, output_file, frame_count, fps, width=None, height=None, stop_event=None):
+# ============================================================
+# === 视频合成（★ 修复：DEVNULL 代替 PIPE，消除阻塞）
+# ============================================================
+def assemble_gamma_mov(frame_dir, output_file, frame_count, fps, width=None, height=None, stop_event=None, timeout=10800):
     global FFMPEG_PATH
     if frame_count == 0:
         return False
@@ -494,7 +511,6 @@ def assemble_gamma_mov(frame_dir, output_file, frame_count, fps, width=None, hei
         print(f"[Gamma] ❌ ffmpeg 不可用: {FFMPEG_PATH}")
         return False
 
-    # 若未显式传宽高，则使用 DEFAULT_PARAMS（兼容旧调用）
     if width is None:
         width = DEFAULT_PARAMS["width"]
     if height is None:
@@ -512,37 +528,41 @@ def assemble_gamma_mov(frame_dir, output_file, frame_count, fps, width=None, hei
     CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, creationflags=CREATE_NO_WINDOW)
+        # ★ 使用 DEVNULL 丢弃 ffmpeg 输出，避免管道阻塞
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                creationflags=CREATE_NO_WINDOW)
     except Exception as e:
         print(f"[Gamma] ❌ 启动 ffmpeg 失败: {e}")
         return False
 
+    start_time = time.time()
     while proc.poll() is None:
+        # 检查停止信号
         if stop_event and stop_event.is_set():
-            print("[Gamma] 检测到停止信号，终止 ffmpeg 进程...")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            try:
-                proc.communicate()
-            except Exception:
-                pass
+            print("[Gamma] 检测到停止信号，终止 ffmpeg...")
+            proc.kill()
+            proc.wait()
             if os.path.exists(output_file):
                 os.remove(output_file)
-                print(f"[Gamma] 已删除半成品视频: {output_file}")
             return False
+
+        # 超时保护
+        if time.time() - start_time > timeout:
+            print(f"[Gamma] 超时 {timeout}s，强制终止")
+            proc.kill()
+            proc.wait()
+            if os.path.exists(output_file):
+                os.remove(output_file)
+            return False
+
         time.sleep(0.1)
 
-    _, err = proc.communicate()
+    # ★ 进程已结束，直接检查 returncode（无需 communicate）
     if proc.returncode == 0:
         print(f"[Gamma] ✅ 视频合成成功: {output_file}")
         return True
     else:
-        print(f"[Gamma] ❌ ffmpeg 合成失败: {(err or '')[:500]}")
+        print(f"[Gamma] ❌ ffmpeg 合成失败 (返回码 {proc.returncode})")
         return False
 
 
