@@ -20,3 +20,6 @@ __pycache__/
 #图片和文字说明
 *.png
 *.txt
+
+#Fit文件
+*.fit

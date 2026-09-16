@@ -2,7 +2,7 @@ from fitparse import FitFile
 from datetime import timedelta
 
 # 使用示例
-file_path = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit\2026-04-25-10-07-30.fit"
+file_path = r"E:\Desktop\Gamin_Generate_Hud_Video_From_Fit_V2\Gamin_Generate_Hud_Video_From_Fit\2026-07-12-07-00-05.fit"
 
 def parse_fit_file(file_path):
     try:

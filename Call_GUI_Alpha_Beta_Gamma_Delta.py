@@ -392,7 +392,7 @@ class FitVideoGeneratorApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("FIT数据视频生成器 V3.2.0")
+        self.title("骑视V3.3.0 可视化每一帧数据")
         self.geometry("1500x760")
         self.fit_path = None
         self.laps = []
