@@ -242,7 +242,7 @@ def _compute_cumulative_gain(alts_smooth, dists, min_height_m, min_dist_m):
 # ============================================================
 # 5) 坡度显示裁剪
 # ============================================================
-def _clip_gradient_display(gradients, lo=0.1, hi=40.0):
+def _clip_gradient_display(gradients, lo=0.0, hi=40.0):
     out = gradients.copy()
     out[np.abs(out) < lo] = 0.0
     out[np.abs(out) > hi] = np.nan

@@ -95,7 +95,99 @@ def parse_color(raw, default=(255, 255, 255)):
                 a = vals[3] if len(vals) >= 4 else 1.0
                 return (vals[0], vals[1], vals[2], a)
     return s
-
+class CustomTimeAxisDialog(tk.Toplevel):
+    def __init__(self, master, fit_min, fit_max):
+        super().__init__(master)
+        self.title("自定义时间轴（UTC+0）")
+        self.transient(master)
+        self.grab_set()
+        self.resizable(False, False)
+        self.fit_min = fit_min
+        self.fit_max = fit_max
+        self.result = None
+        
+        pad = dict(padx=6, pady=4)
+        
+        tk.Label(self, text="请输入 UTC+0 时间（FIT 原始时间）\n开始/结束各 年 月 日 时 分 秒", 
+                 anchor="w", justify="left").pack(fill="x", **pad)
+        
+        frm_start = ttk.LabelFrame(self, text="开始时间")
+        frm_start.pack(fill="x", **pad)
+        self.start_vars = self._make_ymdhms(frm_start, fit_min)
+        
+        frm_end = ttk.LabelFrame(self, text="结束时间")
+        frm_end.pack(fill="x", **pad)
+        self.end_vars = self._make_ymdhms(frm_end, fit_max)
+        
+        self.hint = tk.Label(self, text="", fg="red")
+        self.hint.pack(**pad)
+        
+        frm_btn = ttk.Frame(self)
+        frm_btn.pack(fill="x", **pad)
+        ttk.Button(frm_btn, text="恢复FIT边界", command=self._reset).pack(side="left")
+        ttk.Button(frm_btn, text="取消", command=self._cancel).pack(side="right")
+        ttk.Button(frm_btn, text="确定", command=self._ok).pack(side="right")
+        
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.wait_window(self)
+    
+    def _make_ymdhms(self, parent, dt):
+        names = ["年", "月", "日", "时", "分", "秒"]
+        vals = [dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second]
+        ranges = [(1970, 2100), (1, 12), (1, 31), (0, 23), (0, 59), (0, 59)]
+        vars_ = []
+        frm = ttk.Frame(parent)
+        frm.pack()
+        for i, (name, val, (lo, hi)) in enumerate(zip(names, vals, ranges)):
+            v = tk.StringVar(value=f"{val:02d}")
+            sb = ttk.Spinbox(frm, from_=lo, to=hi, width=4, textvariable=v, format="%02.0f" if name != "年" else "%04.0f")
+            sb.pack(side="left", padx=2)
+            tk.Label(frm, text=name).pack(side="left", padx=(0, 6))
+            vars_.append(v)
+        return vars_
+    
+    def _parse(self, vars_):
+        try:
+            y = int(vars_[0].get())
+            mo = int(vars_[1].get())
+            d = int(vars_[2].get())
+            h = int(vars_[3].get())
+            mi = int(vars_[4].get())
+            s = int(vars_[5].get())
+            return datetime(y, mo, d, h, mi, s)
+        except Exception as e:
+            raise ValueError(f"时间非法：{e}")
+    
+    def _ok(self):
+        try:
+            start = self._parse(self.start_vars)
+            end = self._parse(self.end_vars)
+        except ValueError as e:
+            self.hint["text"] = str(e)
+            return
+        if start >= end:
+            self.hint["text"] = "开始时间必须早于结束时间"
+            return
+        if start < self.fit_min or end > self.fit_max:
+            self.hint["text"] = f"时间超出 FIT 数据范围：\n{self.fit_min}\n~ {self.fit_max}"
+            return
+        self.result = (start, end)
+        self.destroy()
+    
+    def _reset(self):
+        self._set_vars(self.start_vars, self.fit_min)
+        self._set_vars(self.end_vars, self.fit_max)
+        self.hint["text"] = ""
+    
+    def _set_vars(self, vars_, dt):
+        vals = [dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second]
+        for v, val in zip(vars_, vals):
+            v.set(f"{val:02d}")
+    
+    def _cancel(self):
+        self.result = None
+        self.destroy()
+        
 class DictParamsDialog(tk.Toplevel):
     def __init__(self, master, title, param_defs, initial=None, defaults=None):
         super().__init__(master)
@@ -392,8 +484,8 @@ class FitVideoGeneratorApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("骑视V3.3.0 可视化每一帧数据")
-        self.geometry("1500x760")
+        self.title("骑视V3.4.0 可视化每一帧数据")
+        self.geometry("1500x800")
         self.fit_path = None
         self.laps = []
         self.output_dir = ""
@@ -407,6 +499,9 @@ class FitVideoGeneratorApp(tk.Tk):
         self.beta_elev_params = {}
         self.gamma_params = {}
         self.delta_params = {}
+        self.custom_range = None
+        self.fit_min = None
+        self.fit_max = None
         self.generation_thread = None
         self.stop_flag = threading.Event()
         self.log_queue = queue.Queue()
@@ -484,6 +579,16 @@ class FitVideoGeneratorApp(tk.Tk):
         ttk.Button(of, text="浏览...", command=self.select_output_dir).pack(side=tk.RIGHT, padx=5)
         
         lapf = ttk.LabelFrame(mf, text="选择 Lap（所有模块共用。按 Ctrl/Shift 可多选，合成为一整个连续时间轴）", padding=5)
+        cf = ttk.LabelFrame(mf, text="自定义时间轴（UTC+0，FIT原始时间）", padding=5)
+        cf.pack(fill=tk.X, pady=self.GAP)
+        cf_row = ttk.Frame(cf); cf_row.pack(fill=tk.X)
+        self.custom_display = tk.Label(cf_row, text="当前：使用 Lap 时间轴", anchor="w")
+        self.custom_display.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.custom_btn = ttk.Button(cf_row, text="自定义时间轴", command=self.open_custom_time_axis)
+        self.custom_btn.pack(side=tk.LEFT, padx=5)
+        self.clear_custom_btn = ttk.Button(cf_row, text="清除自定义", command=self.clear_custom_time_axis)
+        self.clear_custom_btn.pack(side=tk.LEFT, padx=5)
+        self._action_buttons.extend([self.custom_btn, self.clear_custom_btn])
         lapf.pack(fill=tk.X, pady=self.GAP)
         lbf = ttk.Frame(lapf); lbf.pack(fill=tk.X)
         lap_sb = ttk.Scrollbar(lbf, orient=tk.VERTICAL)
@@ -607,6 +712,11 @@ class FitVideoGeneratorApp(tk.Tk):
         for btn in getattr(self, '_action_buttons', []):
             try: btn.config(state=state)
             except tk.TclError: pass
+            try:
+                if hasattr(self, 'custom_btn'):
+                    self.custom_btn.config(state=state)
+            except tk.TclError:
+                pass
         try: self.lap_listbox.config(state=state)
         except tk.TclError: pass
 
@@ -713,10 +823,30 @@ class FitVideoGeneratorApp(tk.Tk):
     def open_delta(self):
         d = DeltaParamsDialog(self, self.delta_params); r = d.get_result()
         if r: self.delta_params = r; self._update_label(self.delta_lbl, "Delta", self.delta_fps)
+     
+    def open_custom_time_axis(self):
+        if not self.fit_path:
+            messagebox.showwarning("警告", "请先选择 FIT 文件")
+            return
+        dlg = CustomTimeAxisDialog(self, self.fit_min, self.fit_max)
+        if dlg.result is None:
+            return
+        self.custom_range = dlg.result
+        self.lap_listbox.config(state=tk.DISABLED)
+        self.lap_listbox.selection_clear(0, tk.END)
+        s, e = self.custom_range
+        self.custom_display.config(text=f"自定义：{s:%Y-%m-%d %H:%M:%S} ～ {e:%Y-%m-%d %H:%M:%S}（UTC+0）")
+        self.log(f"已切换到自定义时间轴，Lap 选择已禁用")
+
+    def clear_custom_time_axis(self):
+        self.custom_range = None
+        self.lap_listbox.config(state=tk.NORMAL)
+        self.custom_display.config(text="当前：使用 Lap 时间轴")
+        self.log("已清除自定义时间轴，恢复 Lap 模式（Lap 需重新选择）")   
 
     def start(self):
-        if not self.lap_listbox.curselection():
-            messagebox.showwarning("警告","请选择 Lap"); return
+        if self.custom_range is None and not self.lap_listbox.curselection():
+            messagebox.showwarning("警告", "请选择 Lap 或设置自定义时间轴"); return
         any_sel = (self.sphc_var.get() or self.map_var.get() or self.elev_var.get()
                    or self.beta_time_var.get() or self.beta_dist_var.get() or self.beta_elev_var.get()
                    or self.gamma_var.get() or self.delta_var.get())
@@ -783,9 +913,13 @@ class FitVideoGeneratorApp(tk.Tk):
         total_start = time.time()
         was_stopped = False
         try:
-            idxs = self.lap_listbox.curselection()
-            laps = [self.laps[i] for i in idxs]
-            t0 = min(l['start_time'] for l in laps); t1 = max(l['end_time'] for l in laps)
+            if self.custom_range is not None:
+                t0, t1 = self.custom_range
+                idxs = []
+            else:
+                idxs = self.lap_listbox.curselection()
+                laps = [self.laps[i] for i in idxs]
+                t0 = min(l['start_time'] for l in laps); t1 = max(l['end_time'] for l in laps)
             ts = time.strftime('%Y%m%d_%H%M%S')
             ffmp = get_ffmpeg_path()
             out_dir = self.out_dir_var.get()
@@ -893,8 +1027,12 @@ class FitVideoGeneratorApp(tk.Tk):
                 try:
                     mod_gamma = self._get_mod("mod_gamma", MODULE_PATH_GAMMA)
                     gp = self._normalize_gamma_params(self.gamma_params, self.gamma_fps.get())
-                    selected_nums = [i + 1 for i in idxs]
-                    covered_nums = list(range(min(selected_nums), max(selected_nums) + 1))
+                    if self.custom_range is not None:
+                        selected_nums = []
+                        covered_nums = []
+                    else:
+                        selected_nums = [i + 1 for i in idxs]
+                        covered_nums = list(range(min(selected_nums), max(selected_nums) + 1))
                     r = mod_gamma.generate_gamma_metrics_video(
                         fit_path=self.fit_path, lap_start=t0, lap_end=t1, generate_gamma=True,
                         fps=gp.pop('fps', self.gamma_fps.get()), cleanup=False, params_dict=gp or None,
@@ -987,33 +1125,62 @@ class FitVideoGeneratorApp(tk.Tk):
 
     def on_fit_changed(self):
         p = self.file_var.get()
-        if os.path.isfile(p):
-            self.fit_path = p
-            try:
-                from fitparse import FitFile
-                fit = FitFile(p)
-                self.laps = []
-                for i, lap in enumerate(fit.get_messages("lap")):
-                    vals = lap.get_values()
-                    start_time = vals.get("start_time")
-                    elapsed = vals.get("total_elapsed_time")
-                    trigger = vals.get("lap_trigger")
-                    if start_time is not None and elapsed is not None:
-                        end_time = start_time + timedelta(seconds=elapsed)
-                        self.laps.append({
-                            'start_time': start_time,
-                            'end_time': end_time,
-                            'elapsed': elapsed,
-                            'trigger': trigger,
-                        })
-                self.lap_listbox.delete(0, tk.END)
-                for i, l in enumerate(self.laps):
-                    text = (f"[Lap {i+1}] start={l['start_time']:%Y-%m-%d %H:%M:%S}, "
-                            f"end={l['end_time']:%Y-%m-%d %H:%M:%S}, "
-                            f"elapsed={l['elapsed']:.1f}s, trigger={l['trigger']}")
-                    self.lap_listbox.insert(tk.END, text)
-            except Exception as e:
-                self.log(f"读取 Lap 失败: {e}")
+        if not os.path.isfile(p):
+            return
+        self.fit_path = p
+        try:
+            from fitparse import FitFile
+            fit = FitFile(p)
+
+            # 1) 读 lap
+            self.laps = []
+            for i, lap in enumerate(fit.get_messages("lap")):
+                vals = lap.get_values()
+                start_time = vals.get("start_time")
+                elapsed = vals.get("total_elapsed_time")
+                trigger = vals.get("lap_trigger")
+                if start_time is not None and elapsed is not None:
+                    end_time = start_time + timedelta(seconds=elapsed)
+                    self.laps.append({
+                        'start_time': start_time,
+                        'end_time': end_time,
+                        'elapsed': elapsed,
+                        'trigger': trigger,
+                    })
+
+            self.lap_listbox.delete(0, tk.END)
+            for i, l in enumerate(self.laps):
+                text = (f"[Lap {i+1}] start={l['start_time']:%Y-%m-%d %H:%M:%S}, "
+                        f"end={l['end_time']:%Y-%m-%d %H:%M:%S}, "
+                        f"elapsed={l['elapsed']:.1f}s, trigger={l['trigger']}")
+                self.lap_listbox.insert(tk.END, text)
+
+            # 2) 用 record 算整个 FIT 的 UTC+0 边界
+            rec_min = None
+            rec_max = None
+            for rec in fit.get_messages("record"):
+                ts = rec.get_value("timestamp")
+                if ts is None:
+                    continue
+                if rec_min is None or ts < rec_min:
+                    rec_min = ts
+                if rec_max is None or ts > rec_max:
+                    rec_max = ts
+
+            if rec_min is None or rec_max is None:
+                # 兜底：用 lap 边界
+                if self.laps:
+                    rec_min = min(l['start_time'] for l in self.laps)
+                    rec_max = max(l['end_time'] for l in self.laps)
+                else:
+                    raise RuntimeError("FIT 中既没有 record，也没有 lap")
+
+            self.fit_min = rec_min
+            self.fit_max = rec_max
+
+        except Exception as e:
+            self.log(f"读取 FIT 失败: {e}")
+                
     def log(self, m): self.log_queue.put(m+"\n")
     def on_closing(self):
         if self.generation_thread and self.generation_thread.is_alive():
